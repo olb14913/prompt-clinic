@@ -1,0 +1,429 @@
+"""Streamlit: 프롬프트 진단 클리닉 메인 앱."""
+
+from __future__ import annotations
+
+import base64
+import os
+import time
+from datetime import datetime
+from typing import Any, Callable
+
+import streamlit as st
+import streamlit.components.v1 as components
+from dotenv import load_dotenv
+from langchain_openai import ChatOpenAI
+
+from chains.pipeline import build_chain_segments
+
+load_dotenv()
+
+OUTPUT_FORMAT_OPTIONS = ["글", "리스트", "표", "코드", "JSON"]
+IMPROVEMENT_OPTIONS = [
+    "토큰 줄이기",
+    "일관성 높이기",
+    "출력 품질 높이기",
+    "구조화",
+    "맥락 보완",
+]
+
+CRITERION_LABELS = {
+    "clarity": "명확성",
+    "constraint": "제약조건",
+    "output_format": "출력형식",
+    "context": "맥락반영도",
+}
+
+# 개선 목적 → 가중치를 줄 진단 기준 (항목당 +5, 상한 25)
+GOAL_TO_CRITERIA: dict[str, list[str]] = {
+    "토큰 줄이기": ["constraint", "clarity"],
+    "일관성 높이기": ["constraint", "clarity"],
+    "출력 품질 높이기": ["output_format", "clarity"],
+    "구조화": ["output_format", "clarity"],
+    "맥락 보완": ["context"],
+}
+
+
+def apply_goal_weights(diagnosis: dict[str, Any], goals: list[str]) -> dict[str, Any]:
+    keys = ["clarity", "constraint", "output_format", "context"]
+    base_scores: dict[str, int] = {}
+    reasons: dict[str, str] = {}
+    for key in keys:
+        block = diagnosis.get(key) or {}
+        base_scores[key] = int(block.get("score", 0))
+        reasons[key] = str(block.get("reason", ""))
+
+    bonus = {k: 0 for k in keys}
+    for g in goals:
+        for crit in GOAL_TO_CRITERIA.get(g, []):
+            bonus[crit] += 5
+
+    weighted = {k: min(25, base_scores[k] + bonus[k]) for k in keys}
+    total = sum(weighted.values())
+    if total >= 80:
+        grade, badge = "우수", "🟢"
+    elif total >= 50:
+        grade, badge = "보통", "🟡"
+    else:
+        grade, badge = "개선필요", "🔴"
+
+    return {
+        "weighted_scores": weighted,
+        "base_scores": base_scores,
+        "bonus": bonus,
+        "total_score": total,
+        "grade": grade,
+        "grade_badge": badge,
+        "reasons": reasons,
+    }
+
+
+def invoke_with_retry(invoke_fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    """최대 2회 재시도(간격 3초), 총 3회 시도."""
+    delay_sec = 3
+    max_retries = 2
+    last_error: Exception | None = None
+    for attempt in range(max_retries + 1):
+        try:
+            return invoke_fn(*args, **kwargs)
+        except Exception as e:
+            last_error = e
+            if attempt < max_retries:
+                time.sleep(delay_sec)
+    assert last_error is not None
+    raise last_error
+
+
+def build_markdown_report(
+    purpose: str,
+    output_format: str,
+    goals: list[str],
+    user_prompt: str,
+    weighted: dict[str, Any],
+    improved: str,
+    changes: list[dict[str, Any]],
+) -> str:
+    lines = [
+        "# Prompt Clinic 진단 리포트",
+        "",
+        f"생성 시각: {datetime.now().isoformat(timespec='seconds')}",
+        "",
+        "## 맥락",
+        f"- 목적: {purpose or '(없음)'}",
+        f"- 출력 형식: {output_format}",
+        f"- 개선 목적: {', '.join(goals) if goals else '(없음)'}",
+        "",
+        "## 진단 (가중치 반영)",
+        f"- **종합 점수**: {weighted['total_score']} / 100",
+        f"- **등급**: {weighted['grade_badge']} {weighted['grade']}",
+        "",
+    ]
+    for key, label in CRITERION_LABELS.items():
+        sc = weighted["weighted_scores"][key]
+        lines.append(f"- **{label}**: {sc} / 25")
+        lines.append(f"  - 원인: {weighted['reasons'].get(key, '')}")
+    lines.extend(["", "## Before / After", "", "### Before", "```", user_prompt, "```", "", "### After", "```", improved, "```", "", "## 변경 이유"])
+    for ch in changes:
+        lines.append(
+            f"- **{ch.get('criterion', '')}**: `{ch.get('before', '')}` → `{ch.get('after', '')}`  \n  {ch.get('reason', '')}"
+        )
+    return "\n".join(lines)
+
+
+def dynamic_text_area_height(text: str, min_px: int = 150, max_px: int = 400) -> int:
+    t = text or ""
+    line_count = max(1, t.count("\n") + 1)
+    px = 52 + line_count * 22
+    return max(min_px, min(max_px, px))
+
+
+def criterion_expander_title(label: str, final: int, bonus_pts: int) -> str:
+    if bonus_pts > 0:
+        return f"{label} — 최종 점수 {final}/25 (가중치 +{bonus_pts} 적용)"
+    return f"{label} — {final}/25"
+
+
+def score_progress_bar(score: int) -> None:
+    ratio = min(1.0, max(0.0, score / 30.0))
+    st.progress(ratio)
+    badge = "🟢" if score >= 20 else ("🟡" if score >= 10 else "🔴")
+    st.markdown(
+        f"<p style='margin:0.2rem 0 0 0;font-size:1.1rem;line-height:1;'>{badge}</p>",
+        unsafe_allow_html=True,
+    )
+
+
+def render_clipboard_copy_button(text: str, label: str, dom_id: str) -> None:
+    b64 = base64.b64encode(text.encode("utf-8")).decode("ascii")
+    safe_id = "".join(c if c.isalnum() else "_" for c in dom_id)[:64]
+    components.html(
+        f"""
+        <button id="{safe_id}" type="button" style="
+          background-color:#f0f2f6;color:#31333F;border:1px solid #d1d5db;
+          padding:0.375rem 0.75rem;border-radius:0.25rem;cursor:pointer;
+          font-size:0.875rem;font-family:sans-serif;width:100%;">
+          {label}
+        </button>
+        <script>
+        (function() {{
+          const binary = atob("{b64}");
+          const len = binary.length;
+          const bytes = new Uint8Array(len);
+          for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
+          const decoded = new TextDecoder("utf-8").decode(bytes);
+          const el = document.getElementById("{safe_id}");
+          if (el) el.onclick = () => navigator.clipboard.writeText(decoded);
+        }})();
+        </script>
+        """,
+        height=52,
+    )
+
+
+def init_session() -> None:
+    if "history" not in st.session_state:
+        st.session_state.history = []
+    if "rediagnose_prompt" not in st.session_state:
+        st.session_state.rediagnose_prompt = ""
+    if "last_snapshot" not in st.session_state:
+        st.session_state.last_snapshot = None
+    if "auto_diagnose" not in st.session_state:
+        st.session_state.auto_diagnose = False
+
+
+def main() -> None:
+    init_session()
+    st.set_page_config(page_title="Prompt Clinic", page_icon="🩺", layout="wide")
+    st.markdown(
+        """
+<style>
+span[data-baseweb="tag"] {
+    background-color: #1d6fa4 !important;
+    color: white !important;
+}
+</style>
+""",
+        unsafe_allow_html=True,
+    )
+    if st.session_state.get("auto_diagnose"):
+        st.markdown(
+            "<script>window.scrollTo(0, 0);</script>",
+            unsafe_allow_html=True,
+        )
+    st.title("🩺 Prompt Clinic")
+    st.caption("프롬프트를 진단하고 개선안을 제안합니다.")
+
+    with st.sidebar:
+        st.header("맥락 수집")
+        purpose = st.text_area("목적", placeholder="이 프롬프트로 무엇을 달성하려는지 적어주세요.", height=100)
+        output_format = st.selectbox("출력 형식", OUTPUT_FORMAT_OPTIONS, index=0)
+        improvement_goals = st.multiselect("개선 목적", IMPROVEMENT_OPTIONS)
+
+    st.subheader("프롬프트 입력")
+    user_prompt = st.text_area(
+        "진단할 프롬프트",
+        value=st.session_state.rediagnose_prompt,
+        height=220,
+        placeholder="프롬프트를 입력하세요...",
+    )
+
+    auto_trigger = st.session_state.get("auto_diagnose", False)
+    if auto_trigger:
+        st.info("💡 개선된 프롬프트로 재진단을 시작합니다...")
+
+    run = st.button("진단 시작", type="primary")
+    sync_prompt_from_widget = True
+
+    if run or auto_trigger:
+        text = (user_prompt or "").strip()
+        if not text:
+            st.error("프롬프트를 입력해 주세요.")
+            if auto_trigger:
+                st.session_state.auto_diagnose = False
+        elif len(text) < 10:
+            st.error("프롬프트는 최소 10자 이상 입력해 주세요.")
+            if auto_trigger:
+                st.session_state.auto_diagnose = False
+        else:
+            api_key_ok = bool(os.environ.get("OPENAI_API_KEY"))
+            if not api_key_ok:
+                st.error(".env에 OPENAI_API_KEY를 설정해 주세요.")
+                if auto_trigger:
+                    st.session_state.auto_diagnose = False
+            else:
+                llm = ChatOpenAI(model="gpt-4o", temperature=0.2)
+                context_r, diagnosis_r, rewrite_r = build_chain_segments(llm)
+                base_input: dict[str, Any] = {
+                    "purpose": purpose.strip(),
+                    "output_format": output_format,
+                    "improvement_goals": list(improvement_goals),
+                    "user_prompt": text,
+                }
+                try:
+                    with st.status("처리 중...", expanded=True) as status:
+                        status.update(label="🔍 프롬프트 분석 중...", state="running")
+                        context_profile = invoke_with_retry(context_r.invoke, base_input)
+                        merged = {**base_input, "context_profile": context_profile}
+                        status.update(label="🔍 프롬프트 분석 중...", state="running")
+                        diagnosis = invoke_with_retry(diagnosis_r.invoke, merged)
+                        merged = {**merged, "diagnosis": diagnosis}
+                        status.update(label="✍️ 개선안 생성 중...", state="running")
+                        rewrite = invoke_with_retry(rewrite_r.invoke, merged)
+                        status.update(label="✅ 완료!", state="complete")
+
+                    weighted = apply_goal_weights(diagnosis, improvement_goals)
+                    improved = str(rewrite.get("improved_prompt", ""))
+                    changes = list(rewrite.get("changes") or [])
+
+                    st.session_state.last_snapshot = {
+                        "ts": datetime.now(),
+                        "purpose": purpose.strip(),
+                        "output_format": output_format,
+                        "improvement_goals": list(improvement_goals),
+                        "user_prompt": text,
+                        "context_profile": context_profile,
+                        "diagnosis_raw": diagnosis,
+                        "weighted": weighted,
+                        "rewrite": rewrite,
+                    }
+                    st.session_state.history.append(st.session_state.last_snapshot)
+                    st.success("진단이 완료되었습니다. 아래에서 결과를 확인하세요.")
+                    if auto_trigger:
+                        st.session_state.auto_diagnose = False
+                except Exception as e:
+                    st.error(
+                        "API 호출에 실패했습니다. 잠시 후 다시 시도해 주세요.\n\n"
+                        f"상세: `{type(e).__name__}: {e}`"
+                    )
+                    if auto_trigger:
+                        st.session_state.auto_diagnose = False
+
+    snap = st.session_state.last_snapshot
+    if snap:
+        weighted = snap["weighted"]
+        improved = str(snap["rewrite"].get("improved_prompt", ""))
+        changes = list(snap["rewrite"].get("changes") or [])
+        original = snap["user_prompt"]
+
+        st.divider()
+        st.subheader("진단 결과")
+        cols_score = st.columns(4)
+        crit_keys = ["clarity", "constraint", "output_format", "context"]
+        bonus_map = weighted.get("bonus") or {k: 0 for k in crit_keys}
+        for i, key in enumerate(crit_keys):
+            label = CRITERION_LABELS[key]
+            sc = weighted["weighted_scores"][key]
+            with cols_score[i]:
+                st.metric(label, f"{sc} / 25")
+                score_progress_bar(sc)
+        st.caption("등급 기준: 🟢 20점 이상 · 🟡 10~19점 · 🔴 9점 이하 (항목별 최종 점수 기준)")
+        st.markdown(
+            f'<p style="margin:0.5rem 0 0 0;font-size:1.15rem;line-height:1.35;">'
+            f"<strong>종합 {weighted['total_score']} / 100</strong>&nbsp;"
+            f'{weighted["grade_badge"]}&nbsp;<strong>{weighted["grade"]}</strong></p>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("#### 항목별 원인 (CoT)")
+        for key in crit_keys:
+            b_pts = int(bonus_map.get(key, 0))
+            final_sc = weighted["weighted_scores"][key]
+            exp_title = criterion_expander_title(CRITERION_LABELS[key], final_sc, b_pts)
+            with st.expander(exp_title):
+                st.write(weighted["reasons"].get(key, ""))
+
+        st.divider()
+        st.subheader("개선 결과")
+        h_before = dynamic_text_area_height(original)
+        h_after = dynamic_text_area_height(improved)
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("**Before**")
+            st.text_area(
+                "before",
+                value=original,
+                height=h_before,
+                disabled=True,
+                label_visibility="collapsed",
+            )
+        with c2:
+            st.markdown("**After**")
+            st.text_area(
+                "after",
+                value=improved,
+                height=h_after,
+                disabled=True,
+                label_visibility="collapsed",
+            )
+
+        st.markdown("#### 항목별 변경 이유")
+        for ch in changes:
+            st.markdown(
+                f"- **{ch.get('criterion', '')}**  \n"
+                f"  - 변경 전: `{ch.get('before', '')}`  \n"
+                f"  - 변경 후: `{ch.get('after', '')}`  \n"
+                f"  - 이유: {ch.get('reason', '')}"
+            )
+
+        st.markdown("**개선 프롬프트**")
+        copy_id = f"pc_copy_{abs(hash(improved)) % 10_000_000}"
+        col_copy, col_gap, col_redo, _ = st.columns([1.15, 0.35, 1.15, 3.0])
+        with col_copy:
+            render_clipboard_copy_button(improved, "프롬프트 복사", copy_id)
+        with col_gap:
+            st.write("")
+        with col_redo:
+            if st.button(
+                "개선된 프롬프트로 재진단",
+                type="primary",
+                key="redo_diagnose",
+                use_container_width=True,
+            ):
+                st.session_state.rediagnose_prompt = improved
+                sync_prompt_from_widget = False
+                st.session_state.auto_diagnose = True
+                st.markdown(
+                    "<script>window.scrollTo(0, 0);</script>",
+                    unsafe_allow_html=True,
+                )
+                st.rerun()
+
+        fn = datetime.now().strftime("prompt_clinic_%Y%m%d_%H%M%S.md")
+        md_body = build_markdown_report(
+            snap["purpose"],
+            snap["output_format"],
+            snap["improvement_goals"],
+            original,
+            weighted,
+            improved,
+            changes,
+        )
+        st.download_button(
+            "리포트 다운로드 (.md)",
+            data=md_body,
+            file_name=fn,
+            mime="text/markdown",
+            type="secondary",
+        )
+
+    st.divider()
+    st.subheader("세션 히스토리")
+    if not st.session_state.history:
+        st.info("아직 진단 이력이 없습니다.")
+    else:
+        for h in st.session_state.history:
+            ts: datetime = h["ts"]
+            preview = (h["user_prompt"] or "")[:80].replace("\n", " ")
+            w = h.get("weighted")
+            if isinstance(w, dict) and "total_score" in w:
+                grade_part = f" | {w['total_score']}/100 {w.get('grade_badge', '')} {w.get('grade', '')}"
+            else:
+                grade_part = ""
+            st.markdown(
+                f"**{ts.strftime('%Y-%m-%d %H:%M:%S')}** — {preview}…{grade_part}"
+            )
+
+    if sync_prompt_from_widget:
+        st.session_state.rediagnose_prompt = user_prompt
+
+
+if __name__ == "__main__":
+    main()
