@@ -216,6 +216,24 @@ def init_session() -> None:
         st.session_state.auto_diagnose = False
     if "lc_chat_history" not in st.session_state:
         st.session_state.lc_chat_history = InMemoryChatMessageHistory()
+    if "notion_save_status" not in st.session_state:
+        st.session_state.notion_save_status = None  # None | "success" | "error"
+
+
+def _save_to_notion_with_retry(snapshot: dict[str, Any]) -> str:
+    """Notion 저장 1회 재시도. 성공 시 URL 반환, 실패 시 예외 raise."""
+    from utils.notion import save_diagnosis_page
+
+    last_err: Exception | None = None
+    for attempt in range(2):
+        try:
+            return save_diagnosis_page(snapshot)
+        except Exception as e:
+            last_err = e
+            if attempt == 0:
+                time.sleep(1)
+    assert last_err is not None
+    raise last_err
 
 
 def _run_diagnosis(
@@ -379,6 +397,22 @@ def _render_results_panel(snap: dict[str, Any]) -> bool:
             )
             st.rerun()
 
+    if os.environ.get("NOTION_API_KEY") and os.environ.get("NOTION_DB_ID"):
+        col_notion, _ = st.columns([2, 4])
+        with col_notion:
+            if st.button("Notion에 저장", key="notion_save", use_container_width=True):
+                try:
+                    _save_to_notion_with_retry(snap)
+                    st.session_state.notion_save_status = "success"
+                    st.toast("Notion에 저장되었습니다!")
+                except Exception as e:
+                    st.session_state.notion_save_status = "error"
+                    err_detail = f"{type(e).__name__}: {e}"
+                    st.error(
+                        "Notion 저장에 실패했습니다. 잠시 후 다시 시도하거나 "
+                        f"아래 리포트 다운로드를 이용하세요.\n\n상세: `{err_detail}`"
+                    )
+
     fn = datetime.now().strftime("prompt_clinic_%Y%m%d_%H%M%S.md")
     md_body = build_markdown_report(
         snap["purpose"],
@@ -389,6 +423,8 @@ def _render_results_panel(snap: dict[str, Any]) -> bool:
         improved,
         changes,
     )
+    if st.session_state.get("notion_save_status") == "error":
+        st.info("Notion 저장에 실패했습니다. 아래 버튼으로 리포트를 저장하세요.")
     st.download_button(
         "리포트 다운로드 (.md)",
         data=md_body,
