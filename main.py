@@ -42,7 +42,7 @@ CRITERION_LABELS = {
     "context": "맥락반영도",
 }
 
-PROMPT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9가-힣._-]+$")
+PROMPT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9가-힣._\- ]+$")
 
 
 
@@ -538,7 +538,7 @@ span[data-baseweb="tag"] {
             if auto_trigger:
                 st.session_state.auto_diagnose = False
         elif not PROMPT_NAME_PATTERN.fullmatch(prompt_name_text):
-            st.error("프롬프트 명은 영문/숫자/한글과 -, _, . 만 입력할 수 있습니다.")
+            st.error("프롬프트 명은 영문/숫자/한글과 -, _, ., 공백 만 입력할 수 있습니다.")
             if auto_trigger:
                 st.session_state.auto_diagnose = False
         elif not purpose_text:
