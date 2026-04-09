@@ -16,6 +16,7 @@ from langchain_core.chat_history import InMemoryChatMessageHistory
 from langchain_openai import ChatOpenAI
 
 from chains.pipeline import build_chain_segments
+from utils.data_pipeline import sync_learning_data
 
 load_dotenv()
 
@@ -304,6 +305,7 @@ def _run_diagnosis(
             "weighted": weighted,
             "rewrite": rewrite,
         }
+        sync_learning_data(st.session_state.last_snapshot)
         st.session_state.history.append(st.session_state.last_snapshot)
         # F-09 자가개선 루프에서 활용 예정
         st.session_state.lc_chat_history.add_user_message(text[:300])
