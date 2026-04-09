@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
 from typing import Any
 
 import requests
@@ -161,64 +162,75 @@ def _extract_option_names(prop_meta: dict[str, Any], key: str) -> set[str]:
 
 
 def _build_legacy_properties(snapshot: dict[str, Any]) -> dict[str, Any]:
-    prompt_name = str(snapshot.get("prompt_name") or "")
     purpose = str(snapshot.get("purpose") or "")
     user_prompt = str(snapshot.get("user_prompt") or "")
-    goals: list[str] = snapshot.get("improvement_goals") or []
     weighted: dict[str, Any] = snapshot.get("weighted") or {}
     rewrite: dict[str, Any] = snapshot.get("rewrite") or {}
     improved = str(rewrite.get("improved_prompt") or "")
+    changes: list[dict[str, Any]] = list(rewrite.get("changes") or [])
     total_score = int(weighted.get("total_score") or 0)
     grade = str(weighted.get("grade") or "")
-    return {
-        "목적": {"title": _rich_text((prompt_name or purpose)[:2000])},
+    changes_summary = "\n".join(
+        f"[{ch.get('criterion', '')}] {ch.get('reason', '')}"
+        for ch in changes
+    )
+    now_iso = datetime.now(timezone.utc).isoformat()
+    props: dict[str, Any] = {
+        "프롬프트 명": {"title": _rich_text(user_prompt[:40])},
         "종합점수": {"number": total_score},
         "등급": {"select": {"name": grade}} if grade else {"select": {}},
         "Before": {"rich_text": _rich_text(user_prompt)},
         "After": {"rich_text": _rich_text(improved)},
-        "개선목적": {"multi_select": [{"name": g} for g in goals if g]},
+        "날짜": {"date": {"start": now_iso}},
     }
+    if purpose:
+        props["프롬프트 사용목적"] = {"rich_text": _rich_text(purpose)}
+    if changes_summary:
+        props["개선포인트"] = {"rich_text": _rich_text(changes_summary)}
+    return props
 
 
 def _build_properties_by_schema(
     snapshot: dict[str, Any],
     db_props: dict[str, Any],
 ) -> dict[str, Any]:
-    prompt_name = snapshot.get("prompt_name") or ""
-    purpose = snapshot.get("purpose") or ""
-    output_format = snapshot.get("output_format") or ""
-    user_prompt = snapshot.get("user_prompt") or ""
-    goals: list[str] = snapshot.get("improvement_goals") or []
+    purpose = str(snapshot.get("purpose") or "")
+    user_prompt = str(snapshot.get("user_prompt") or "")
     weighted: dict[str, Any] = snapshot.get("weighted") or {}
     rewrite: dict[str, Any] = snapshot.get("rewrite") or {}
     improved = str(rewrite.get("improved_prompt") or "")
+    changes: list[dict[str, Any]] = list(rewrite.get("changes") or [])
 
     total_score: int = int(weighted.get("total_score") or 0)
     grade: str = str(weighted.get("grade") or "")
-    title_text = str(prompt_name or purpose or "prompt_clinic")
-    usage_purpose = str(purpose or "")
+    title_text = user_prompt[:40]
+    changes_summary = "\n".join(
+        f"[{ch.get('criterion', '')}] {ch.get('reason', '')}"
+        for ch in changes
+    )
+    now_iso = datetime.now(timezone.utc).isoformat()
     payload_props: dict[str, Any] = {}
 
     title_match = _find_property_name(
         db_props,
-        candidates=["프롬프트 명", "목적", "Name", "제목"],
+        candidates=["프롬프트 명", "Name", "제목"],
         allowed_types={"title"},
         allow_any_fallback=True,
     )
     if title_match is None:
         raise RuntimeError("Notion DB에 title 타입 컬럼이 없습니다.")
     title_name, title_type = title_match
-    _set_text_prop(payload_props, title_name, title_type, title_text[:2000])
+    _set_text_prop(payload_props, title_name, title_type, title_text)
 
     usage_match = _find_property_name(
         db_props,
         candidates=["프롬프트 사용목적", "사용목적", "purpose"],
         allowed_types={"rich_text", "title"},
     )
-    if usage_match is not None and usage_purpose:
+    if usage_match is not None and purpose:
         usage_name, usage_type = usage_match
         if usage_name != title_name:
-            _set_text_prop(payload_props, usage_name, usage_type, usage_purpose[:2000])
+            _set_text_prop(payload_props, usage_name, usage_type, purpose[:2000])
 
     score_match = _find_property_name(
         db_props,
@@ -259,40 +271,21 @@ def _build_properties_by_schema(
     if after_match is not None and improved:
         payload_props[after_match[0]] = {"rich_text": _rich_text(improved)}
 
-    goals_match = _find_property_name(
+    improve_match = _find_property_name(
         db_props,
-        candidates=["개선목적", "개선 목적", "improvement_goals"],
-        allowed_types={"multi_select"},
+        candidates=["개선포인트", "개선 포인트", "changes"],
+        allowed_types={"rich_text"},
     )
-    if goals_match is not None and goals:
-        goals_name = goals_match[0]
-        goals_meta = db_props.get(goals_name)
-        if isinstance(goals_meta, dict):
-            option_names = _extract_option_names(goals_meta, "multi_select")
-            if option_names:
-                valid_goals = [g for g in goals if g and g in option_names]
-            else:
-                valid_goals = [g for g in goals if g]
-            if valid_goals:
-                payload_props[goals_name] = {
-                    "multi_select": [{"name": g} for g in valid_goals]
-                }
+    if improve_match is not None and changes_summary:
+        payload_props[improve_match[0]] = {"rich_text": _rich_text(changes_summary)}
 
-    output_match = _find_property_name(
+    date_match = _find_property_name(
         db_props,
-        candidates=["출력형식", "출력 형식", "output_format"],
-        allowed_types={"rich_text", "select"},
+        candidates=["날짜", "date", "생성일"],
+        allowed_types={"date"},
     )
-    if output_match is not None and output_format:
-        output_name, output_type = output_match
-        if output_type == "select":
-            output_meta = db_props.get(output_name)
-            if isinstance(output_meta, dict):
-                option_names = _extract_option_names(output_meta, "select")
-                if not option_names or output_format in option_names:
-                    payload_props[output_name] = {"select": {"name": output_format}}
-        else:
-            payload_props[output_name] = {"rich_text": _rich_text(output_format)}
+    if date_match is not None:
+        payload_props[date_match[0]] = {"date": {"start": now_iso}}
 
     return payload_props
 
