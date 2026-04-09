@@ -162,6 +162,7 @@ def _extract_option_names(prop_meta: dict[str, Any], key: str) -> set[str]:
 
 
 def _build_legacy_properties(snapshot: dict[str, Any]) -> dict[str, Any]:
+    prompt_name = str(snapshot.get("prompt_name") or "")
     purpose = str(snapshot.get("purpose") or "")
     user_prompt = str(snapshot.get("user_prompt") or "")
     weighted: dict[str, Any] = snapshot.get("weighted") or {}
@@ -171,12 +172,12 @@ def _build_legacy_properties(snapshot: dict[str, Any]) -> dict[str, Any]:
     total_score = int(weighted.get("total_score") or 0)
     grade = str(weighted.get("grade") or "")
     changes_summary = "\n".join(
-        f"[{ch.get('criterion', '')}] {ch.get('reason', '')}"
+        f"[{ch.get('criterion', '')}] {ch.get('before', '')} → {ch.get('after', '')} : {ch.get('reason', '')}"
         for ch in changes
     )
     now_iso = datetime.now(timezone.utc).isoformat()
     props: dict[str, Any] = {
-        "프롬프트 명": {"title": _rich_text(user_prompt[:40])},
+        "프롬프트 명": {"title": _rich_text(prompt_name[:40])},
         "종합점수": {"number": total_score},
         "등급": {"select": {"name": grade}} if grade else {"select": {}},
         "Before": {"rich_text": _rich_text(user_prompt)},
@@ -194,6 +195,7 @@ def _build_properties_by_schema(
     snapshot: dict[str, Any],
     db_props: dict[str, Any],
 ) -> dict[str, Any]:
+    prompt_name = str(snapshot.get("prompt_name") or "")
     purpose = str(snapshot.get("purpose") or "")
     user_prompt = str(snapshot.get("user_prompt") or "")
     weighted: dict[str, Any] = snapshot.get("weighted") or {}
@@ -203,9 +205,9 @@ def _build_properties_by_schema(
 
     total_score: int = int(weighted.get("total_score") or 0)
     grade: str = str(weighted.get("grade") or "")
-    title_text = user_prompt[:40]
+    title_text = prompt_name[:40]
     changes_summary = "\n".join(
-        f"[{ch.get('criterion', '')}] {ch.get('reason', '')}"
+        f"[{ch.get('criterion', '')}] {ch.get('before', '')} → {ch.get('after', '')} : {ch.get('reason', '')}"
         for ch in changes
     )
     now_iso = datetime.now(timezone.utc).isoformat()
