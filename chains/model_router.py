@@ -38,25 +38,21 @@ class RoutingConfig:
 
 
 def read_routing_config() -> RoutingConfig:
-    base_openai_model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+    base_openai_model = os.environ.get("OPENAI_MODEL", "gpt-4o")
     temp = float(os.environ.get("OPENAI_TEMPERATURE", "0.2"))
-    cheap_model = os.environ.get("OPENAI_CHEAP_MODEL", "gpt-4o-mini")
     return RoutingConfig(
         temperature=temp,
-        openai_diagnosis_model=os.environ.get("OPENAI_DIAGNOSIS_MODEL", cheap_model),
+        openai_diagnosis_model=os.environ.get(
+            "OPENAI_DIAGNOSIS_MODEL", base_openai_model
+        ),
         openai_rewrite_model=os.environ.get(
-            "OPENAI_REWRITE_MODEL",
-            cheap_model or base_openai_model,
+            "OPENAI_REWRITE_MODEL", base_openai_model
         ),
         opus_model=os.environ.get("ANTHROPIC_MODEL_OPUS", "claude-3-opus-20240229"),
         opus_threshold=max(0, min(100, _env_int("OPUS_SCORE_THRESHOLD", 70))),
         self_improve_enabled=_env_bool("SELF_IMPROVE_ENABLED", False),
         self_improve_max_iterations=max(1, _env_int("SELF_IMPROVE_MAX_ITERS", 3)),
     )
-
-
-def should_use_self_improve() -> bool:
-    return read_routing_config().self_improve_enabled
 
 
 def make_openai_llm(model_name: str, temperature: float) -> ChatOpenAI:

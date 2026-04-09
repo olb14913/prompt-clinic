@@ -1,36 +1,27 @@
-# PR: Prompt Clinic 기능 구현 완료
+# PR: Prompt Clinic 기능 구현 및 고도화 완료
 
 ---
 
 ## 1. 한줄 요약
 
-초기 레포에 스텁/미구현으로 남아 있던 진단 품질·안정성·히스토리·Notion 아카이빙 기능을 전부 완성하고,
-코드 구조를 정리하여 바로 운영 가능한 상태로 만들었습니다.
+초기 구현 완성(F-01~F-08) 이후 맥락수집 정책 개편, Notion 저장 안정화, 학습 데이터 파이프라인, F-09 자가개선 루프 1차, Notion few-shot 동적 로드까지 반영해 운영/확장 기반을 고도화했습니다.
 
 ---
 
-## 2. 초기 레포 상태
+## 2. 작업 배경 및 범위
 
-**있었던 것**
-- `main.py` — Streamlit UI 뼈대, LLM 호출 함수(`invoke_with_retry`), Before/After 화면
-- `chains/` — 맥락 수집·진단·재작성 3개 체인 (기본 동작)
-- `utils/notion.py` — 함수 껍데기만 있고 실제 코드 없음 (스텁)
-- `requirements.txt` — 기본 의존성
-
-**없었던 것 (스텁·미구현)**
-- 진단 결과 원인 설명: 전체 항목을 무조건 표시하고 있었음 (14점 이하 필터 없음)
-- 복사 버튼: 클립보드 복사는 되나 완료 피드백 없음
-- 히스토리: 타임스탬프·점수만 표시, 개선 프롬프트 요약 없음
-- 목적 입력란 최소 길이 검증 없음
-- API 재시도 시 UI 카운터 없음 ("재시도 중 1/2" 표시 안 됨)
-- 로딩 상태가 단계별로 바뀌지 않고 동일 메시지 반복
-- Few-shot 예시 2개가 소스 코드 내부에 하드코딩
-- 모델명·temperature 하드코딩 (`gpt-4o`, `0.2` 고정)
-- `main()` 함수 270줄 — 역할별 분리 없음
+이번 PR 계열에서 반영된 주요 범위:
+- 맥락수집 입력 항목 To-be 반영(프롬프트 명 추가/입력 정책 강화)
+- Notion 저장 스키마 동적 매핑 + fallback
+- 학습 원천 데이터 적재(`prompt_runs.jsonl`) + few-shot 자동 갱신
+- 점수 기반 모델 라우팅(OpenAI 저가 모델 ↔ Claude Opus)
+- F-09 자가개선 루프 1차 구현(반복 개선 + 최고점 선택)
+- Notion 기반 few-shot 동적 로드(기본 OFF + JSON fallback)
+- 레벨(1~4) 균형 + 고득점 우선 few-shot 선별
 
 ---
 
-## 3. 구현 완료 항목
+## 3. 구현 완료 항목 (누적)
 
 ### F-02-4 — 진단 원인: 전체 항목 표시
 
@@ -120,20 +111,10 @@
 
 ---
 
-### fix — Notion DB 컬럼명 불일치 수정
+### fix — Notion DB 스키마 동적 매핑 확장
 
-**무엇을**: `utils/notion.py`의 `_build_payload()` 함수에서 Notion DB 프로퍼티 키를 실제 팀 DB 스키마와 일치하도록 수정했습니다.
-
-| 수정 전 | 수정 후 |
-|---------|---------|
-| `"Name"` (title) — 날짜 + 프롬프트 미리보기 | `"목적"` (title) |
-| — | `"종합점수"` (number) |
-| — | `"등급"` (select) |
-| — | `"Before"` (rich_text) |
-| — | `"After"` (rich_text) |
-| — | `"개선목적"` (multi_select) |
-
-**왜**: 초기 구현에서는 Notion DB 스키마를 가정해 `Name` 컬럼 하나만 properties로 작성했으나, 실제 팀 DB 컬럼명과 타입이 맞지 않아 저장 시 오류가 발생. 실제 DB 스키마에 맞게 전체 properties를 재구성했습니다.
+**무엇을**: 저장 전 DB 스키마를 조회해 컬럼 타입(title/number/select/multi_select/rich_text)에 맞춰 동적으로 매핑하도록 확장했습니다.
+**왜**: DB 컬럼명이 일부 변경되거나 워크스페이스마다 스키마가 달라도 저장 실패를 최소화하기 위해서입니다.
 
 ---
 
@@ -141,6 +122,71 @@
 
 **무엇을**: Notion 저장에 실패한 경우 리포트 다운로드 버튼 위에 `st.info` 안내 메시지를 자동으로 표시합니다.
 **왜**: 저장 실패 시 사용자가 데이터를 잃지 않도록 명확한 대체 경로를 안내합니다.
+
+---
+
+### F-01 정책 개편 — 맥락수집 To-be 반영
+
+**무엇을**
+- 사이드바에 `프롬프트 명` 필드 추가
+- 안내 문구 추가: “추후 프롬프트 다운로드 및 저장 시, 파일명으로 사용됩니다.”
+- 기존 `목적` 라벨을 `프롬프트 사용목적`으로 변경
+- 입력 정책 강화:
+  - 프롬프트 명: 필수, 20자 이하, 영문/숫자/한글 + `-`, `_`, `.`
+  - 프롬프트 사용목적: 필수, 100자 이하
+  - 진단할 프롬프트: 필수, 500자 이하
+  - 개선목적: 1개 이상 선택 필수
+
+**왜**: 회의 To-be 화면설계와 입력 정책을 코드에 정확히 반영하기 위해.
+
+---
+
+### 학습 데이터 파이프라인 추가
+
+**무엇을**
+- 신규 파일 `utils/data_pipeline.py`
+- 진단 완료 시 실행 로그를 `data/prompt_runs.jsonl`에 append-only 저장
+- `total_score` 기반 프롬프트 레벨(1~4) 자동 판정
+- 누적 로그를 바탕으로 `data/fewshot_examples.json` 자동 갱신
+
+**왜**: few-shot 수동 관리 의존도를 낮추고, 이후 F-09/레벨 시스템/RAG 확장을 위한 기반 데이터 축적이 필요하기 때문.
+
+---
+
+### F-09 자가개선 루프 1차 구현 + 모델 라우팅
+
+**무엇을**
+- 신규 파일 `chains/self_improve_chain.py`
+  - 개선 → 재진단 반복
+  - 점수 향상 시 keep, 정체/악화 시 조기 종료
+  - 최고점 결과 반환
+- 신규 파일 `chains/model_router.py`
+  - 환경변수 기반 라우팅 설정
+  - 점수 임계치(`OPUS_SCORE_THRESHOLD`, 기본 70) 기준으로 rewrite 모델 분기
+  - Opus 미사용 환경(`ANTHROPIC_API_KEY` 없음)에서는 OpenAI 경로 자동 fallback
+- `main.py` 연동
+  - `SELF_IMPROVE_ENABLED=true`일 때만 루프 동작 (기본 OFF)
+
+**왜**: 비용 최적화와 품질 개선 반복을 동시에 달성하기 위해.
+
+---
+
+### Notion few-shot 동적 로드 + 레벨 균형 샘플링
+
+**무엇을**
+- `utils/notion.py`에 `load_fewshot_examples_from_notion()` 추가
+  - `NOTION_FEWSHOT_ENABLED=true`일 때 Notion DB 조회
+  - `NOTION_FEWSHOT_DB_ID` 우선, 없으면 `NOTION_DB_ID` 사용
+  - 실패/빈 결과 시 기존 JSON fallback 유지
+- `chains/diagnosis_chain.py`
+  - `FEWSHOT_SOURCE_NOTION=true`일 때 Notion 우선 로드
+  - few-shot 섹션에 레벨/출처 메타 표시
+- Notion 수집 예시 선별 정책
+  - 레벨(1~4) 균형 우선
+  - 레벨 내 고득점 우선
+  - `NOTION_FEWSHOT_PER_LEVEL`로 레벨별 샘플 수 조절
+
+**왜**: 동적 사례를 안정적으로 품질 학습에 반영하면서 편향을 줄이기 위해.
 
 ---
 
@@ -152,12 +198,18 @@
 | `ARCHITECTURE.md` | 전체 파일 구조·데이터 흐름·체인 연결·session_state 키 목록 | 신규 개발자·기획·디자인 팀원이 구조를 빠르게 파악할 수 있도록 |
 | `data/fewshot_examples.json` | AI 진단 정확도를 높이는 예시 3건 (개선필요·보통·우수) | 하드코딩 제거, 예시 추가·수정을 코드 없이 가능하게 |
 | `utils/notion.py` (실구현) | Notion API v1 연동 — 진단 결과를 DB 페이지로 저장 | F-06-1 스텁 → 실제 구현 교체 |
+| `utils/data_pipeline.py` | 학습 원천 로그 적재 + few-shot 자동 갱신 | 수동 운영 최소화 및 확장 기반 마련 |
+| `chains/model_router.py` | 점수 기반 모델 라우팅(OpenAI/Opus) | 비용/품질 균형 제어 |
+| `chains/self_improve_chain.py` | F-09 자가개선 루프 | 반복 개선 자동화 |
 
 ---
 
 ## 5. 보류 항목
 
-**보류 항목 없음.** 기획된 모든 기능(F-01 ~ F-08)이 완료됐습니다.
+**보류 항목(차기 작업)**
+- 사용자 Notion OAuth 연동(개인 워크스페이스 저장)
+- RAG 인덱싱 파이프라인 구축(Notion/로그 기반)
+- F-09 루프 전략 다양화(다중 rewrite 전략, 조기 중단 규칙 고도화)
 
 ---
 
@@ -170,12 +222,28 @@
 OPENAI_API_KEY=sk-...
 
 # 선택 — 없으면 기본값으로 동작합니다
-OPENAI_MODEL=gpt-4o          # 사용할 OpenAI 모델 (기본: gpt-4o)
+OPENAI_MODEL=gpt-4o-mini     # 기본 진단/개선 경로에 사용할 OpenAI 모델
 OPENAI_TEMPERATURE=0.2       # 응답 다양성 조절 0.0~1.0 (기본: 0.2)
 
 # Notion 자동 저장 사용 시 — 두 값 모두 있어야 버튼이 표시됩니다
 NOTION_API_KEY=secret_...    # Notion Integration 토큰
 NOTION_DB_ID=...             # 진단 결과를 저장할 Notion 데이터베이스 ID
+
+# 자가개선 루프 + 모델 라우팅 (기본 OFF)
+SELF_IMPROVE_ENABLED=false
+SELF_IMPROVE_MAX_ITERS=3
+OPUS_SCORE_THRESHOLD=70
+OPENAI_CHEAP_MODEL=gpt-4o-mini
+OPENAI_DIAGNOSIS_MODEL=gpt-4o-mini
+OPENAI_REWRITE_MODEL=gpt-4o-mini
+ANTHROPIC_API_KEY=
+ANTHROPIC_MODEL_OPUS=claude-3-opus-20240229
+
+# Notion few-shot 동적 로드 (기본 OFF)
+FEWSHOT_SOURCE_NOTION=false
+NOTION_FEWSHOT_ENABLED=false
+NOTION_FEWSHOT_DB_ID=
+NOTION_FEWSHOT_PER_LEVEL=2
 ```
 
 > `NOTION_API_KEY` / `NOTION_DB_ID` 중 하나라도 없으면 "Notion에 저장" 버튼이 숨겨집니다. Notion 없이도 앱은 정상 동작합니다.
@@ -197,25 +265,28 @@ NOTION_DB_ID=...             # 진단 결과를 저장할 Notion 데이터베이
 
 ## 8. 향후 업그레이드 계획
 
-이번 PR에서 구현하지 않은 차기 기능 후보입니다. 상세 설계는 `CLAUDE.md` 및 `ARCHITECTURE.md`를 참고하세요.
+이번 PR 이후 차기 기능 후보입니다. 상세 설계는 `CLAUDE.md` 및 `ARCHITECTURE.md`를 참고하세요.
 
-### F-09 — 자가개선 루프 (autoresearch 패턴)
-karpathy/autoresearch 패턴을 Prompt Clinic에 적용합니다.
-개선 프롬프트를 다시 진단에 투입 → `total_score` 측정 → 점수가 오르면 keep, 안 오르면 다른 전략으로 재시도 → N회 반복 후 최고점 프롬프트를 반환합니다.
-현재 `session_state.lc_chat_history`에 원본·개선 쌍이 이미 저장되고 있어 이 루프에서 바로 활용할 수 있습니다.
-구현 위치: 신규 파일 `chains/self_improve_chain.py` + `main.py` 연동.
+### F-09 고도화 — 자가개선 전략 확장
+- 현재: 1차 루프(반복 개선 + 최고점 선택) 구현 완료
+- 차기:
+  - 다중 rewrite 전략 탐색(구조화 우선, 제약 강화 우선 등)
+  - iteration별 성능 로그 분석/시각화
+  - 루프 중간 품질 기준 기반 조기 종료 고도화
 
-### Few-shot 사례 Notion 연동 자동 갱신
-현재 `data/fewshot_examples.json`은 수동 관리 중입니다.
-Notion DB에 쌓인 Before/After 진단 데이터를 활용해, 점수 높은 After는 좋은 사례로, 점수 낮은 Before는 나쁜 사례로 자동 추가합니다.
-`load_fewshot_examples()`가 JSON 대신 Notion DB에서 동적으로 읽도록 확장합니다.
-F-06 Notion 연동 안정화 후 진행 예정.
+### Notion 기반 동적 학습/RAG 준비
+- 현재: Notion few-shot 동적 로드(기본 OFF) + 레벨 균형 선별 구현
+- 차기:
+  - Notion 원천 데이터 임베딩 파이프라인
+  - 레벨/점수/도메인 메타 필터 기반 retrieval
+  - 사용자별 개인화 사례 추천
 
 ### 프롬프트 4단계 레벨 시스템
-프롬프트 엔지니어링 수준을 4단계(초급·중급·고급·전문가)로 분류해 사용자 학습 경로를 제공합니다.
-현재 `total_score`와 연계해 레벨을 자동 판정하고, 레벨별 개선 가이드와 템플릿 라이브러리를 제공합니다.
-누적 히스토리에서 패턴을 추출해 레벨별 템플릿을 자동 생성하는 기능도 포함합니다.
-복잡한 판단 기준 설계가 필요해 Opus 모델 활용을 권장합니다.
+- 현재: 총점 기반 레벨 자동 판정(1~4) 및 학습 로그 저장 구현
+- 차기:
+  - 레벨별 개선 가이드/템플릿 자동 제시
+  - 레벨별 취약 기준 분석 리포트
+  - 누적 히스토리 패턴 기반 템플릿 자동 생성
 
 > 상세 설계 및 구현 가이드: [`CLAUDE.md`](./CLAUDE.md) "향후 업그레이드 계획" 섹션, [`ARCHITECTURE.md`](./ARCHITECTURE.md) "F-09 자가개선 루프 연결 위치" 섹션 참고.
 
