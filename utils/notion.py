@@ -446,6 +446,88 @@ def _score_candidates() -> dict[str, list[str]]:
     }
 
 
+def _infer_level_from_score(score: int) -> int:
+    if score >= 80:
+        return 4
+    if score >= 60:
+        return 3
+    if score >= 40:
+        return 2
+    return 1
+
+
+def _normalize_level(level_text: str, total_score: int) -> int:
+    cleaned = level_text.strip().lower()
+    if cleaned:
+        if cleaned.isdigit():
+            parsed = _safe_int(cleaned)
+            if parsed is not None:
+                return max(1, min(4, parsed))
+        if "초급" in cleaned:
+            return 1
+        if "중급" in cleaned:
+            return 2
+        if "고급" in cleaned:
+            return 3
+        if "전문" in cleaned:
+            return 4
+    return _infer_level_from_score(total_score)
+
+
+def _select_balanced_examples(
+    candidates: list[dict[str, Any]],
+    limit: int,
+    per_level_limit: int,
+) -> list[dict[str, Any]]:
+    grouped: dict[int, list[dict[str, Any]]] = {1: [], 2: [], 3: [], 4: []}
+    for item in candidates:
+        level = _safe_int(item.get("level"))
+        if level is None:
+            continue
+        level = max(1, min(4, level))
+        grouped[level].append(item)
+
+    for level in [1, 2, 3, 4]:
+        grouped[level].sort(
+            key=lambda row: _safe_int(row.get("total_score")) or 0,
+            reverse=True,
+        )
+
+    selected: list[dict[str, Any]] = []
+    selected_keys: set[str] = set()
+    for level in [1, 2, 3, 4]:
+        picked = 0
+        for item in grouped[level]:
+            item_key = f"{item.get('page_id')}::{item.get('prompt')}"
+            if item_key in selected_keys:
+                continue
+            selected.append(item)
+            selected_keys.add(item_key)
+            picked += 1
+            if picked >= per_level_limit or len(selected) >= limit:
+                break
+        if len(selected) >= limit:
+            break
+
+    if len(selected) >= limit:
+        return selected[:limit]
+
+    remaining = sorted(
+        candidates,
+        key=lambda row: _safe_int(row.get("total_score")) or 0,
+        reverse=True,
+    )
+    for item in remaining:
+        item_key = f"{item.get('page_id')}::{item.get('prompt')}"
+        if item_key in selected_keys:
+            continue
+        selected.append(item)
+        selected_keys.add(item_key)
+        if len(selected) >= limit:
+            break
+    return selected
+
+
 def load_fewshot_examples_from_notion(limit: int = 8) -> list[dict[str, Any]]:
     """Notion DB에서 few-shot 예시를 조회해 diagnosis 입력 포맷으로 변환."""
     if not _env_bool("NOTION_FEWSHOT_ENABLED", False):
@@ -486,14 +568,14 @@ def load_fewshot_examples_from_notion(limit: int = 8) -> list[dict[str, Any]]:
         allowed_types={"number", "select", "rich_text", "title"},
     )
     score_props: dict[str, str | None] = {}
-    for key, candidates in _score_candidates().items():
+    for key, score_name_candidates in _score_candidates().items():
         score_props[key] = _pick_property_name(
             db_props,
-            candidates=candidates,
+            candidates=score_name_candidates,
             allowed_types={"number", "rich_text", "title"},
         )
 
-    examples: list[dict[str, Any]] = []
+    candidates: list[dict[str, Any]] = []
     seen_prompts: set[str] = set()
     for page in pages:
         props = page.get("properties")
@@ -522,25 +604,48 @@ def load_fewshot_examples_from_notion(limit: int = 8) -> list[dict[str, Any]]:
             analysis = f"Notion 수집 사례: 총점 {total_score}/100, 등급 {grade}."
 
         level_text = _property_text(props.get(level_prop)) if level_prop else ""
-        level_text = level_text.strip()
-        label = "Notion 자동 수집 예시"
-        if level_text:
-            label = f"{label} (레벨 {level_text})"
+        level_num = _normalize_level(level_text, total_score)
 
-        examples.append({
-            "label": label,
+        candidates.append({
+            "label": f"Notion 자동 수집 예시 (레벨 {level_num})",
             "prompt": prompt,
             "analysis": analysis,
             "scores": {k: str(v) for k, v in score_map.items()},
             "total_hint": _score_to_hint(total_score),
             "grade": grade,
+            "level": level_num,
+            "total_score": total_score,
             "source": "notion",
             "page_id": str(page.get("id") or ""),
         })
         seen_prompts.add(prompt)
-        if len(examples) >= limit:
+        if len(candidates) >= max(limit * 3, 12):
             break
 
+    if not candidates:
+        return []
+    per_level_limit = _safe_int(os.environ.get("NOTION_FEWSHOT_PER_LEVEL"))
+    if per_level_limit is None:
+        per_level_limit = 2
+    selected = _select_balanced_examples(
+        candidates,
+        limit=max(1, limit),
+        per_level_limit=max(1, per_level_limit),
+    )
+    examples = []
+    for item in selected:
+        examples.append({
+            "label": item.get("label", "Notion 자동 수집 예시"),
+            "prompt": item.get("prompt", ""),
+            "analysis": item.get("analysis", ""),
+            "scores": item.get("scores", {}),
+            "total_hint": item.get("total_hint", "중간"),
+            "grade": item.get("grade", "보통"),
+            "level": item.get("level", 0),
+            "source": item.get("source", "notion"),
+            "page_id": item.get("page_id", ""),
+            "total_score": item.get("total_score", 0),
+        })
     return examples
 
 

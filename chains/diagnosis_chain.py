@@ -115,9 +115,17 @@ def format_fewshot_section(examples: list[dict[str, Any]]) -> str:
     lines = ["## Few-shot 참고"]
     for ex in examples:
         score_text = ", ".join(f"{k} {v}" for k, v in ex["scores"].items())
+        level_text = str(ex.get("level") or "").strip()
+        source_text = str(ex.get("source") or "").strip()
+        meta_parts: list[str] = []
+        if level_text:
+            meta_parts.append(f"레벨 {level_text}")
+        if source_text:
+            meta_parts.append(f"출처 {source_text}")
+        meta_suffix = f" ({', '.join(meta_parts)})" if meta_parts else ""
         lines.extend([
             "",
-            f"### {ex['label']}",
+            f"### {ex['label']}{meta_suffix}",
             f"프롬프트: \"{ex['prompt']}\"",
             f"분석: {ex['analysis']}",
             f"점수 예: {score_text}, 합계 {ex['total_hint']} → {ex['grade']}.",
