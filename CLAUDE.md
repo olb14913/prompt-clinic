@@ -11,7 +11,7 @@
 - `chains/diagnosis_chain.py` : Chain 2 — 4항목 진단 + Few-shot 로드
 - `chains/rewrite_chain.py` : Chain 3 — 개선 프롬프트 생성
 - `chains/pipeline.py` : 기본 3체인 조립 (LCEL)
-- `chains/model_router.py` : 점수 기반 모델 라우팅(OpenAI 저가 ↔ Opus) 설정
+- `chains/model_router.py` : 점수 기반 모델 라우팅(OpenAI ↔ Opus) 설정
 - `chains/self_improve_chain.py` : F-09 자가개선 루프(개선→재진단 반복)
 - `utils/notion.py` : Notion 저장 + Notion few-shot 조회 유틸
 - `utils/data_pipeline.py` : 원천 실행로그(`prompt_runs.jsonl`) 적재 + few-shot 자동 갱신
@@ -49,19 +49,20 @@
 
 ## 환경변수 (.env) — 최신
 ```bash
-# OpenAI
+# 필수
 OPENAI_API_KEY=sk-...
-OPENAI_MODEL=gpt-4o-mini
+
+# 선택 — OpenAI 모델 설정 (기본값으로 동작, gpt-4o 단일 모델 사용)
+OPENAI_MODEL=gpt-4o
 OPENAI_TEMPERATURE=0.2
-OPENAI_CHEAP_MODEL=gpt-4o-mini
-OPENAI_DIAGNOSIS_MODEL=gpt-4o-mini
-OPENAI_REWRITE_MODEL=gpt-4o-mini
+OPENAI_DIAGNOSIS_MODEL=gpt-4o    # 진단 체인 모델 (기본: OPENAI_MODEL)
+OPENAI_REWRITE_MODEL=gpt-4o      # 재작성 체인 모델 (기본: OPENAI_MODEL)
 
 # F-09 / Model routing
 SELF_IMPROVE_ENABLED=false
 SELF_IMPROVE_MAX_ITERS=3
 OPUS_SCORE_THRESHOLD=70
-ANTHROPIC_API_KEY=
+ANTHROPIC_API_KEY=               # Opus 활성화 시 필수
 ANTHROPIC_MODEL_OPUS=claude-3-opus-20240229
 
 # Notion 저장

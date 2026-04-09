@@ -21,7 +21,7 @@ from chains.model_router import (
     read_routing_config,
 )
 from chains.pipeline import build_chain_segments
-from chains.self_improve_chain import run_self_improve_loop
+from chains.self_improve_chain import apply_goal_weights, run_self_improve_loop
 from utils.data_pipeline import sync_learning_data
 
 load_dotenv()
@@ -42,50 +42,8 @@ CRITERION_LABELS = {
     "context": "맥락반영도",
 }
 
-# 개선 목적 → 가중치를 줄 진단 기준 (항목당 +5, 상한 25)
-GOAL_TO_CRITERIA: dict[str, list[str]] = {
-    "토큰 줄이기": ["constraint", "clarity"],
-    "일관성 높이기": ["constraint", "clarity"],
-    "출력 품질 높이기": ["output_format", "clarity"],
-    "구조화": ["output_format", "clarity"],
-    "맥락 보완": ["context"],
-}
-
 PROMPT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9가-힣._-]+$")
 
-
-def apply_goal_weights(diagnosis: dict[str, Any], goals: list[str]) -> dict[str, Any]:
-    keys = ["clarity", "constraint", "output_format", "context"]
-    base_scores: dict[str, int] = {}
-    reasons: dict[str, str] = {}
-    for key in keys:
-        block = diagnosis.get(key) or {}
-        base_scores[key] = int(block.get("score", 0))
-        reasons[key] = str(block.get("reason", ""))
-
-    bonus = {k: 0 for k in keys}
-    for g in goals:
-        for crit in GOAL_TO_CRITERIA.get(g, []):
-            bonus[crit] += 5
-
-    weighted = {k: min(25, base_scores[k] + bonus[k]) for k in keys}
-    total = sum(weighted.values())
-    if total >= 80:
-        grade, badge = "우수", "🟢"
-    elif total >= 50:
-        grade, badge = "보통", "🟡"
-    else:
-        grade, badge = "개선필요", "🔴"
-
-    return {
-        "weighted_scores": weighted,
-        "base_scores": base_scores,
-        "bonus": bonus,
-        "total_score": total,
-        "grade": grade,
-        "grade_badge": badge,
-        "reasons": reasons,
-    }
 
 
 def invoke_with_retry(
@@ -160,8 +118,6 @@ def dynamic_text_area_height(text: str, min_px: int = 150, max_px: int = 400) ->
 
 
 def criterion_expander_title(label: str, final: int, bonus_pts: int) -> str:
-    if bonus_pts > 0:
-        return f"{label} — 최종 점수 {final}/25 (가중치 +{bonus_pts} 적용)"
     return f"{label} — {final}/25"
 
 
@@ -265,6 +221,7 @@ def _run_diagnosis(
     auto_trigger: bool,
 ) -> None:
     """LLM 체인 실행 및 결과를 session_state에 저장."""
+    st.session_state.notion_save_status = None
     routing = read_routing_config()
     temperature = routing.temperature
     llm = make_openai_llm(routing.openai_diagnosis_model, temperature)
@@ -343,7 +300,6 @@ def _run_diagnosis(
         }
         sync_learning_data(st.session_state.last_snapshot)
         st.session_state.history.append(st.session_state.last_snapshot)
-        # F-09 자가개선 루프에서 활용 예정
         st.session_state.lc_chat_history.add_user_message(text[:300])
         st.session_state.lc_chat_history.add_ai_message(improved[:300])
         st.success("진단이 완료되었습니다. 아래에서 결과를 확인하세요.")
@@ -388,8 +344,7 @@ def _render_results_panel(snap: dict[str, Any]) -> bool:
         unsafe_allow_html=True,
     )
     st.markdown("#### 항목별 원인 (CoT)")
-    low_score_keys = [k for k in crit_keys if weighted["weighted_scores"][k] <= 14]
-    for key in low_score_keys:
+    for key in crit_keys:
         b_pts = int(bonus_map.get(key, 0))
         final_sc = weighted["weighted_scores"][key]
         exp_title = criterion_expander_title(CRITERION_LABELS[key], final_sc, b_pts)
