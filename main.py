@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import os
+import re
 import time
 from datetime import datetime
 from typing import Any, Callable
@@ -42,6 +43,8 @@ GOAL_TO_CRITERIA: dict[str, list[str]] = {
     "구조화": ["output_format", "clarity"],
     "맥락 보완": ["context"],
 }
+
+PROMPT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9가-힣._-]+$")
 
 
 def apply_goal_weights(diagnosis: dict[str, Any], goals: list[str]) -> dict[str, Any]:
@@ -105,6 +108,7 @@ def invoke_with_retry(
 
 
 def build_markdown_report(
+    prompt_name: str,
     purpose: str,
     output_format: str,
     goals: list[str],
@@ -119,6 +123,7 @@ def build_markdown_report(
         f"생성 시각: {datetime.now().isoformat(timespec='seconds')}",
         "",
         "## 맥락",
+        f"- 프롬프트 명: {prompt_name}",
         f"- 목적: {purpose or '(없음)'}",
         f"- 출력 형식: {output_format}",
         f"- 개선 목적: {', '.join(goals) if goals else '(없음)'}",
@@ -161,6 +166,14 @@ def score_progress_bar(score: int) -> None:
         f"<p style='margin:0.2rem 0 0 0;font-size:1.1rem;line-height:1;'>{badge}</p>",
         unsafe_allow_html=True,
     )
+
+
+def sanitize_prompt_name_for_filename(prompt_name: str) -> str:
+    """다운로드 파일명에 안전한 프롬프트 명으로 정규화."""
+    trimmed = (prompt_name or "").strip()
+    safe = re.sub(r"[^A-Za-z0-9가-힣._-]", "_", trimmed)
+    safe = safe.strip("._-")
+    return safe or "prompt_clinic"
 
 
 def render_clipboard_copy_button(text: str, label: str, dom_id: str) -> None:
@@ -237,6 +250,7 @@ def _save_to_notion_with_retry(snapshot: dict[str, Any]) -> str:
 
 
 def _run_diagnosis(
+    prompt_name: str,
     purpose: str,
     output_format: str,
     improvement_goals: list[str],
@@ -280,6 +294,7 @@ def _run_diagnosis(
 
         st.session_state.last_snapshot = {
             "ts": datetime.now(),
+            "prompt_name": prompt_name,
             "purpose": purpose,
             "output_format": output_format,
             "improvement_goals": list(improvement_goals),
@@ -413,8 +428,11 @@ def _render_results_panel(snap: dict[str, Any]) -> bool:
                         f"아래 리포트 다운로드를 이용하세요.\n\n상세: `{err_detail}`"
                     )
 
-    fn = datetime.now().strftime("prompt_clinic_%Y%m%d_%H%M%S.md")
+    prompt_name = str(snap.get("prompt_name") or "prompt_clinic")
+    safe_prompt_name = sanitize_prompt_name_for_filename(prompt_name)
+    fn = f"{safe_prompt_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
     md_body = build_markdown_report(
+        prompt_name,
         snap["purpose"],
         snap["output_format"],
         snap["improvement_goals"],
@@ -489,7 +507,13 @@ span[data-baseweb="tag"] {
 
     with st.sidebar:
         st.header("맥락 수집")
-        purpose = st.text_area("목적", placeholder="이 프롬프트로 무엇을 달성하려는지 적어주세요.", height=100)
+        prompt_name = st.text_input("프롬프트 명", placeholder="예: prompt_v1")
+        st.caption("추후 프롬프트 다운로드 및 저장 시, 파일명으로 사용됩니다.")
+        purpose = st.text_area(
+            "프롬프트 사용목적",
+            placeholder="이 프롬프트를 어디에 사용하는지 적어주세요.",
+            height=100,
+        )
         output_format = st.selectbox("출력 형식", OUTPUT_FORMAT_OPTIONS, index=0)
         improvement_goals = st.multiselect("개선 목적", IMPROVEMENT_OPTIONS)
 
@@ -510,17 +534,38 @@ span[data-baseweb="tag"] {
 
     if run or auto_trigger:
         text = (user_prompt or "").strip()
+        prompt_name_text = (prompt_name or "").strip()
         purpose_text = (purpose or "").strip()
-        if not text:
+        if not prompt_name_text:
+            st.error("프롬프트 명을 입력해 주세요.")
+            if auto_trigger:
+                st.session_state.auto_diagnose = False
+        elif len(prompt_name_text) > 20:
+            st.error("프롬프트 명은 20자 이하로 입력해 주세요.")
+            if auto_trigger:
+                st.session_state.auto_diagnose = False
+        elif not PROMPT_NAME_PATTERN.fullmatch(prompt_name_text):
+            st.error("프롬프트 명은 영문/숫자/한글과 -, _, . 만 입력할 수 있습니다.")
+            if auto_trigger:
+                st.session_state.auto_diagnose = False
+        elif not purpose_text:
+            st.error("프롬프트 사용목적을 입력해 주세요.")
+            if auto_trigger:
+                st.session_state.auto_diagnose = False
+        elif len(purpose_text) > 100:
+            st.error("프롬프트 사용목적은 100자 이하로 입력해 주세요.")
+            if auto_trigger:
+                st.session_state.auto_diagnose = False
+        elif not text:
             st.error("프롬프트를 입력해 주세요.")
             if auto_trigger:
                 st.session_state.auto_diagnose = False
-        elif len(text) < 10:
-            st.error("프롬프트는 최소 10자 이상 입력해 주세요.")
+        elif len(text) > 500:
+            st.error("프롬프트는 500자 이하로 입력해 주세요.")
             if auto_trigger:
                 st.session_state.auto_diagnose = False
-        elif purpose_text and len(purpose_text) < 10:
-            st.error("목적은 최소 10자 이상 입력해 주세요. (비워두는 것도 가능합니다)")
+        elif not improvement_goals:
+            st.error("개선 목적을 하나 이상 선택해 주세요.")
             if auto_trigger:
                 st.session_state.auto_diagnose = False
         elif not os.environ.get("OPENAI_API_KEY"):
@@ -528,7 +573,14 @@ span[data-baseweb="tag"] {
             if auto_trigger:
                 st.session_state.auto_diagnose = False
         else:
-            _run_diagnosis(purpose_text, output_format, improvement_goals, text, auto_trigger)
+            _run_diagnosis(
+                prompt_name_text,
+                purpose_text,
+                output_format,
+                improvement_goals,
+                text,
+                auto_trigger,
+            )
 
     snap = st.session_state.last_snapshot
     if snap:
