@@ -13,9 +13,15 @@ import streamlit as st
 import streamlit.components.v1 as components
 from dotenv import load_dotenv
 from langchain_core.chat_history import InMemoryChatMessageHistory
-from langchain_openai import ChatOpenAI
 
+from chains.model_router import (
+    build_opus_llm,
+    build_openai_rewrite_llm,
+    make_openai_llm,
+    read_routing_config,
+)
 from chains.pipeline import build_chain_segments
+from chains.self_improve_chain import run_self_improve_loop
 from utils.data_pipeline import sync_learning_data
 
 load_dotenv()
@@ -259,9 +265,9 @@ def _run_diagnosis(
     auto_trigger: bool,
 ) -> None:
     """LLM 체인 실행 및 결과를 session_state에 저장."""
-    model_name = os.environ.get("OPENAI_MODEL", "gpt-4o")
-    temperature = float(os.environ.get("OPENAI_TEMPERATURE", "0.2"))
-    llm = ChatOpenAI(model=model_name, temperature=temperature)
+    routing = read_routing_config()
+    temperature = routing.temperature
+    llm = make_openai_llm(routing.openai_diagnosis_model, temperature)
     context_r, diagnosis_r, rewrite_r = build_chain_segments(llm)
     base_input: dict[str, Any] = {
         "purpose": purpose,
@@ -273,24 +279,54 @@ def _run_diagnosis(
         with st.status("처리 중...", expanded=True) as status:
             status.update(label="🔍 프롬프트 분석 중...", state="running")
             context_profile = invoke_with_retry(
-                context_r.invoke, base_input,
+                context_r.invoke,
+                base_input,
                 on_retry=_make_retry_cb(status, "맥락 분석"),
             )
             merged = {**base_input, "context_profile": context_profile}
             status.update(label="📊 진단 중...", state="running")
             diagnosis = invoke_with_retry(
-                diagnosis_r.invoke, merged,
+                diagnosis_r.invoke,
+                merged,
                 on_retry=_make_retry_cb(status, "품질 진단"),
             )
-            merged = {**merged, "diagnosis": diagnosis}
+            weighted = apply_goal_weights(diagnosis, improvement_goals)
             status.update(label="✍️ 개선안 생성 중...", state="running")
-            rewrite = invoke_with_retry(
-                rewrite_r.invoke, merged,
-                on_retry=_make_retry_cb(status, "개선안 생성"),
-            )
+            if routing.self_improve_enabled:
+                rewrite_openai_llm = build_openai_rewrite_llm(routing)
+                rewrite_opus_llm = build_opus_llm(routing)
+                _, _, rewrite_r_openai = build_chain_segments(rewrite_openai_llm)
+                rewrite_r_opus = None
+                if rewrite_opus_llm is not None:
+                    _, _, rewrite_r_opus = build_chain_segments(rewrite_opus_llm)
+                loop_result = invoke_with_retry(
+                    run_self_improve_loop,
+                    base_input=base_input,
+                    context_profile=context_profile,
+                    diagnosis_r=diagnosis_r,
+                    rewrite_r_openai=rewrite_r_openai,
+                    rewrite_r_opus=rewrite_r_opus,
+                    routing=routing,
+                    max_iters=routing.self_improve_max_iterations,
+                    invoke_with_retry_fn=invoke_with_retry,
+                    on_iteration=lambda n, total, stage: status.update(
+                        label=f"🔁 자가개선 {n}/{total} {stage}",
+                        state="running",
+                    ),
+                    on_retry=_make_retry_cb(status, "자가개선 루프"),
+                )
+                best = loop_result.get("best") or {}
+                rewrite = best.get("rewrite") or {}
+                weighted = best.get("weighted") or weighted
+                diagnosis = best.get("diagnosis_raw") or diagnosis
+            else:
+                merged = {**merged, "diagnosis": diagnosis}
+                rewrite = invoke_with_retry(
+                    rewrite_r.invoke,
+                    merged,
+                    on_retry=_make_retry_cb(status, "개선안 생성"),
+                )
             status.update(label="✅ 완료!", state="complete")
-
-        weighted = apply_goal_weights(diagnosis, improvement_goals)
         improved = str(rewrite.get("improved_prompt", ""))
 
         st.session_state.last_snapshot = {
