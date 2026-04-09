@@ -11,7 +11,7 @@
 - `chains/diagnosis_chain.py` : Chain 2 — 4항목 진단 + CoT (DiagnosisResult Pydantic)
 - `chains/rewrite_chain.py` : Chain 3 — 개선 프롬프트 생성 (RewriteResult Pydantic)
 - `chains/pipeline.py` : 세 체인을 LCEL로 조립
-- `utils/notion.py` : Notion API 연동 (현재 스텁, F-06 구현 대상)
+- `utils/notion.py` : Notion API v1 연동 — `save_diagnosis_page(snapshot)` 구현 완료. 진단 결과를 Notion DB 페이지로 저장하고 페이지 URL 반환.
 - `.env` : API 키 (git 제외)
 - `requirements.txt` : 의존성
 
@@ -24,6 +24,7 @@
 | 기능 ID | 변경 내용 | 이유 |
 |---------|----------|------|
 | F-04-2 | 복사 완료 피드백을 `st.toast` 대신 JS 내 버튼 텍스트 2초 변경으로 구현 | `st.toast`는 서버 사이드라 JS 클릭 이벤트에서 직접 호출 불가 |
+| F-02-4 | 진단 원인 설명을 14점 이하 항목만 표시 → 전체 항목 표시로 변경 | 팀장님 피드백 반영, 회의 결정사항 (2026-04-09) |
 
 ## UI/UX 동결 규칙 — 절대 건드리지 말 것
 - 레이아웃, 컬러, 폰트, 컴포넌트 배치, 여백 등 시각적 요소 일체 수정 금지
@@ -97,7 +98,7 @@ requirements.txt
 - [x] F-02-1 프롬프트 입력창 — 최소 10자 검증 포함
 - [x] F-02-2 4개 기준 분석 — `diagnosis_chain.py`, 가중치 반영
 - [x] F-02-3 항목별 점수 산출 — `apply_goal_weights()`, 등급 배지
-- [x] F-02-4 문제 원인 설명 — 14점 이하 항목만 expander 표시. 전체 통과 시 "개선 필요 항목 없음" 안내.
+- [x] F-02-4 문제 원인 설명 — 전체 항목 expander 표시 (팀장님 피드백 반영, 회의 결정사항).
 
 ### F-03 재작성
 - [x] F-03-1 개선 프롬프트 생성 — `rewrite_chain.py`
