@@ -1,6 +1,7 @@
 """Chain 2: 프롬프트 진단 (Few-shot + CoT)."""
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -8,6 +9,7 @@ from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
+from utils.notion import load_fewshot_examples_from_notion
 
 _FEWSHOT_PATH = Path(__file__).parent.parent / "data" / "fewshot_examples.json"
 _DEFAULT_FEWSHOT_EXAMPLES: list[dict[str, Any]] = [
@@ -91,6 +93,11 @@ DIAGNOSIS_HUMAN = """## 맥락 프로필 (JSON)
 
 def load_fewshot_examples() -> list[dict[str, Any]]:
     """data/fewshot_examples.json 에서 few-shot 예시를 로드한다."""
+    use_notion = os.environ.get("FEWSHOT_SOURCE_NOTION", "").strip().lower()
+    if use_notion in {"1", "true", "y", "yes", "on"}:
+        notion_examples = load_fewshot_examples_from_notion()
+        if notion_examples:
+            return notion_examples
     if not _FEWSHOT_PATH.exists():
         return _DEFAULT_FEWSHOT_EXAMPLES
     try:

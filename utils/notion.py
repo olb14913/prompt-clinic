@@ -311,6 +311,239 @@ def _fetch_database_properties(db_id: str) -> dict[str, Any]:
     return {}
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "y", "yes", "on"}
+
+
+def _safe_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _score_to_grade(score: int) -> str:
+    if score >= 80:
+        return "우수"
+    if score >= 50:
+        return "보통"
+    return "개선필요"
+
+
+def _score_to_hint(score: int) -> str:
+    if score >= 80:
+        return "높음"
+    if score >= 50:
+        return "중간"
+    return "낮음"
+
+
+def _join_rich_text(items: Any) -> str:
+    if not isinstance(items, list):
+        return ""
+    chunks: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        plain = str(item.get("plain_text") or "").strip()
+        if plain:
+            chunks.append(plain)
+            continue
+        text_obj = item.get("text")
+        if isinstance(text_obj, dict):
+            content = str(text_obj.get("content") or "").strip()
+            if content:
+                chunks.append(content)
+    return "".join(chunks).strip()
+
+
+def _property_text(prop_value: Any) -> str:
+    if not isinstance(prop_value, dict):
+        return ""
+    prop_type = str(prop_value.get("type") or "")
+    if prop_type in {"title", "rich_text"}:
+        return _join_rich_text(prop_value.get(prop_type))
+    if prop_type == "select":
+        select_obj = prop_value.get("select")
+        if isinstance(select_obj, dict):
+            return str(select_obj.get("name") or "").strip()
+        return ""
+    if prop_type == "multi_select":
+        items = prop_value.get("multi_select")
+        if not isinstance(items, list):
+            return ""
+        names = []
+        for item in items:
+            if isinstance(item, dict):
+                name = str(item.get("name") or "").strip()
+                if name:
+                    names.append(name)
+        return ", ".join(names)
+    if prop_type == "number":
+        number_val = prop_value.get("number")
+        if number_val is None:
+            return ""
+        return str(number_val)
+    return ""
+
+
+def _property_number(prop_value: Any) -> int | None:
+    if not isinstance(prop_value, dict):
+        return None
+    prop_type = str(prop_value.get("type") or "")
+    if prop_type == "number":
+        return _safe_int(prop_value.get("number"))
+    if prop_type in {"title", "rich_text", "select"}:
+        return _safe_int(_property_text(prop_value))
+    return None
+
+
+def _query_database_pages(db_id: str, page_size: int) -> list[dict[str, Any]]:
+    query = {
+        "page_size": max(1, min(page_size, 100)),
+        "sorts": [{"timestamp": "last_edited_time", "direction": "descending"}],
+    }
+    resp = requests.post(
+        f"{NOTION_BASE_URL}/databases/{db_id}/query",
+        headers=_headers(),
+        json=query,
+        timeout=10,
+    )
+    resp.raise_for_status()
+    body = resp.json()
+    results = body.get("results")
+    if not isinstance(results, list):
+        return []
+    return [item for item in results if isinstance(item, dict)]
+
+
+def _pick_property_name(
+    db_props: dict[str, Any],
+    candidates: list[str],
+    allowed_types: set[str],
+) -> str | None:
+    matched = _find_property_name(
+        db_props,
+        candidates=candidates,
+        allowed_types=allowed_types,
+    )
+    if matched is None:
+        return None
+    return matched[0]
+
+
+def _score_candidates() -> dict[str, list[str]]:
+    return {
+        "clarity": ["명확성", "clarity"],
+        "constraint": ["제약조건", "constraint"],
+        "output_format": ["출력형식", "output_format"],
+        "context": ["맥락반영도", "context"],
+    }
+
+
+def load_fewshot_examples_from_notion(limit: int = 8) -> list[dict[str, Any]]:
+    """Notion DB에서 few-shot 예시를 조회해 diagnosis 입력 포맷으로 변환."""
+    if not _env_bool("NOTION_FEWSHOT_ENABLED", False):
+        return []
+    api_key = os.environ.get("NOTION_API_KEY", "")
+    db_id = os.environ.get("NOTION_FEWSHOT_DB_ID") or os.environ.get("NOTION_DB_ID", "")
+    if not api_key or not db_id:
+        return []
+
+    db_props = _fetch_database_properties(db_id)
+    pages = _query_database_pages(db_id, page_size=max(10, limit * 2))
+    if not pages:
+        return []
+
+    prompt_prop = _pick_property_name(
+        db_props,
+        candidates=["After", "개선 프롬프트", "프롬프트", "Before", "원본 프롬프트", "원본"],
+        allowed_types={"rich_text", "title"},
+    )
+    analysis_prop = _pick_property_name(
+        db_props,
+        candidates=["분석", "analysis", "요약", "진단요약"],
+        allowed_types={"rich_text", "title"},
+    )
+    grade_prop = _pick_property_name(
+        db_props,
+        candidates=["등급", "grade"],
+        allowed_types={"select", "rich_text", "title"},
+    )
+    total_prop = _pick_property_name(
+        db_props,
+        candidates=["종합점수", "총점", "total_score"],
+        allowed_types={"number", "rich_text", "title"},
+    )
+    level_prop = _pick_property_name(
+        db_props,
+        candidates=["레벨", "prompt_level", "level"],
+        allowed_types={"number", "select", "rich_text", "title"},
+    )
+    score_props: dict[str, str | None] = {}
+    for key, candidates in _score_candidates().items():
+        score_props[key] = _pick_property_name(
+            db_props,
+            candidates=candidates,
+            allowed_types={"number", "rich_text", "title"},
+        )
+
+    examples: list[dict[str, Any]] = []
+    seen_prompts: set[str] = set()
+    for page in pages:
+        props = page.get("properties")
+        if not isinstance(props, dict):
+            continue
+        prompt = _property_text(props.get(prompt_prop)) if prompt_prop else ""
+        prompt = prompt.strip()
+        if not prompt or prompt in seen_prompts:
+            continue
+
+        score_map: dict[str, int] = {}
+        for key in ["clarity", "constraint", "output_format", "context"]:
+            prop_name = score_props.get(key)
+            parsed = _property_number(props.get(prop_name)) if prop_name else None
+            score_map[key] = parsed if parsed is not None else 0
+
+        total_score = _property_number(props.get(total_prop)) if total_prop else None
+        if total_score is None:
+            total_score = sum(score_map.values())
+        grade = _property_text(props.get(grade_prop)) if grade_prop else ""
+        grade = grade.strip() or _score_to_grade(total_score)
+
+        analysis = _property_text(props.get(analysis_prop)) if analysis_prop else ""
+        analysis = analysis.strip()
+        if not analysis:
+            analysis = f"Notion 수집 사례: 총점 {total_score}/100, 등급 {grade}."
+
+        level_text = _property_text(props.get(level_prop)) if level_prop else ""
+        level_text = level_text.strip()
+        label = "Notion 자동 수집 예시"
+        if level_text:
+            label = f"{label} (레벨 {level_text})"
+
+        examples.append({
+            "label": label,
+            "prompt": prompt,
+            "analysis": analysis,
+            "scores": {k: str(v) for k, v in score_map.items()},
+            "total_hint": _score_to_hint(total_score),
+            "grade": grade,
+            "source": "notion",
+            "page_id": str(page.get("id") or ""),
+        })
+        seen_prompts.add(prompt)
+        if len(examples) >= limit:
+            break
+
+    return examples
+
+
 def save_diagnosis_page(snapshot: dict[str, Any]) -> str:
     """진단 결과를 Notion 데이터베이스 페이지로 저장합니다.
 
