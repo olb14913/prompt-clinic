@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime
 from typing import Any
 
 import requests
@@ -110,15 +109,27 @@ def _build_blocks(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _build_payload(snapshot: dict[str, Any], db_id: str) -> dict[str, Any]:
-    ts: datetime = snapshot.get("ts") or datetime.now()
+    purpose = snapshot.get("purpose") or ""
     user_prompt = snapshot.get("user_prompt") or ""
-    preview = user_prompt[:40].replace("\n", " ")
-    title = f"{ts.strftime('%Y-%m-%d %H:%M')} | {preview}"
+    goals: list[str] = snapshot.get("improvement_goals") or []
+    weighted: dict[str, Any] = snapshot.get("weighted") or {}
+    rewrite: dict[str, Any] = snapshot.get("rewrite") or {}
+    improved = str(rewrite.get("improved_prompt") or "")
+
+    total_score: int = int(weighted.get("total_score") or 0)
+    grade: str = str(weighted.get("grade") or "")
 
     return {
         "parent": {"database_id": db_id},
         "properties": {
-            "Name": {"title": _rich_text(title)},
+            "목적": {"title": _rich_text(purpose[:2000])},
+            "종합점수": {"number": total_score},
+            "등급": {"select": {"name": grade}} if grade else {"select": {}},
+            "Before": {"rich_text": _rich_text(user_prompt)},
+            "After": {"rich_text": _rich_text(improved)},
+            "개선목적": {
+                "multi_select": [{"name": g} for g in goals if g]
+            },
         },
         "children": _build_blocks(snapshot),
     }
