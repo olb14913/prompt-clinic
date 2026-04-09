@@ -10,6 +10,41 @@ from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 
 _FEWSHOT_PATH = Path(__file__).parent.parent / "data" / "fewshot_examples.json"
+_DEFAULT_FEWSHOT_EXAMPLES: list[dict[str, Any]] = [
+    {
+        "label": "낮은 점수 예시",
+        "prompt": "이거 좀 해줘",
+        "analysis": (
+            "목표·형식·제약이 전무함 → 명확성 매우 낮음, "
+            "출력 구조 없음, 맥락 없음."
+        ),
+        "scores": {
+            "clarity": "5",
+            "constraint": "3",
+            "output_format": "4",
+            "context": "2",
+        },
+        "total_hint": "낮음",
+        "grade": "개선필요",
+    },
+    {
+        "label": "높은 점수 예시",
+        "prompt": (
+            "당신은 시니어 데이터 분석가입니다. 아래 CSV 요약에서 "
+            "(1) 월별 매출 추이 표, (2) 이상치 3건 이내 bullet, "
+            "(3) 권장 액션 2개를 한국어로 작성하세요. 500자 이내."
+        ),
+        "analysis": "역할·입력·산출 형식·제약이 명시됨.",
+        "scores": {
+            "clarity": "22",
+            "constraint": "20",
+            "output_format": "23",
+            "context": "21",
+        },
+        "total_hint": "높음",
+        "grade": "우수",
+    },
+]
 
 
 class ScoreBlock(BaseModel):
@@ -56,8 +91,16 @@ DIAGNOSIS_HUMAN = """## 맥락 프로필 (JSON)
 
 def load_fewshot_examples() -> list[dict[str, Any]]:
     """data/fewshot_examples.json 에서 few-shot 예시를 로드한다."""
-    with _FEWSHOT_PATH.open(encoding="utf-8") as f:
-        return json.load(f)
+    if not _FEWSHOT_PATH.exists():
+        return _DEFAULT_FEWSHOT_EXAMPLES
+    try:
+        loaded = json.loads(_FEWSHOT_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return _DEFAULT_FEWSHOT_EXAMPLES
+    if not isinstance(loaded, list):
+        return _DEFAULT_FEWSHOT_EXAMPLES
+    normalized = [item for item in loaded if isinstance(item, dict)]
+    return normalized or _DEFAULT_FEWSHOT_EXAMPLES
 
 
 def format_fewshot_section(examples: list[dict[str, Any]]) -> str:
