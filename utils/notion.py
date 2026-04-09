@@ -53,6 +53,7 @@ def _code_block(text: str) -> dict[str, Any]:
 
 
 def _build_blocks(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    prompt_name = snapshot.get("prompt_name") or ""
     purpose = snapshot.get("purpose") or ""
     output_format = snapshot.get("output_format") or ""
     goals: list[str] = snapshot.get("improvement_goals") or []
@@ -67,6 +68,7 @@ def _build_blocks(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
     # 맥락
     blocks.append(_heading(2, "맥락"))
     ctx_lines = [
+        f"프롬프트 명: {prompt_name or '(없음)'}",
         f"목적: {purpose or '(없음)'}",
         f"출력 형식: {output_format}",
         f"개선 목적: {', '.join(goals) if goals else '(없음)'}",
@@ -109,6 +111,7 @@ def _build_blocks(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _build_payload(snapshot: dict[str, Any], db_id: str) -> dict[str, Any]:
+    prompt_name = snapshot.get("prompt_name") or ""
     purpose = snapshot.get("purpose") or ""
     user_prompt = snapshot.get("user_prompt") or ""
     goals: list[str] = snapshot.get("improvement_goals") or []
@@ -122,7 +125,7 @@ def _build_payload(snapshot: dict[str, Any], db_id: str) -> dict[str, Any]:
     return {
         "parent": {"database_id": db_id},
         "properties": {
-            "목적": {"title": _rich_text(purpose[:2000])},
+            "목적": {"title": _rich_text((prompt_name or purpose)[:2000])},
             "종합점수": {"number": total_score},
             "등급": {"select": {"name": grade}} if grade else {"select": {}},
             "Before": {"rich_text": _rich_text(user_prompt)},
