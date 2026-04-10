@@ -61,6 +61,14 @@ UI_BADGE_YELLOW = "#ffd700"
 UI_BADGE_RED = "#d40924"
 UI_BORDER_ALTO = "#DEDEDE"
 
+# 진단기록 행 토글 — 항목별 개선포인트(st.expander) 쉐브론과 유사한 크기·형태
+_HISTORY_ROW_CHEVRON_SVG = (
+    '<svg class="pc-h-chevron" width="12" height="12" viewBox="0 0 24 24" '
+    'fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">'
+    '<path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2.25" '
+    'stroke-linecap="round" stroke-linejoin="round"/></svg>'
+)
+
 # figma.html(와이어) 등급 배지 문구 — 앱 로직의 grade 문자열과 매핑만 함
 FIGMA_GRADE_BADGE: dict[str, tuple[str, str, str]] = {
     "우수": ("즉시사용가능", UI_BADGE_GREEN, "#ffffff"),
@@ -234,40 +242,6 @@ def render_clipboard_copy_button(
         </script>
         """,
         height=52,
-    )
-
-
-def _scroll_to_top() -> None:
-    """브라우저 최상단 스크롤(재진단 UX)."""
-    components.html(
-        """
-        <script>
-        (function() {
-          try {
-            window.scrollTo({ top: 0, behavior: "smooth" });
-            if (window.parent && window.parent !== window) {
-              window.parent.scrollTo({ top: 0, behavior: "smooth" });
-            }
-          } catch (e) {}
-        })();
-        </script>
-        """,
-        height=0,
-    )
-
-
-def _scroll_and_rerun() -> None:
-    """먼저 스크롤만 수행하고 즉시 rerun."""
-    components.html(
-        """
-        <script>
-        (function() {
-          const p = (window.parent && window.parent !== window) ? window.parent : window;
-          try { p.scrollTo({ top: 0, behavior: "smooth" }); } catch (e) {}
-        })();
-        </script>
-        """,
-        height=0,
     )
 
 
@@ -629,8 +603,6 @@ def init_session() -> None:
         st.session_state.rediagnose_context = None
     if "rediagnose_prefill_pending" not in st.session_state:
         st.session_state.rediagnose_prefill_pending = False
-    if "rediagnose_phase" not in st.session_state:
-        st.session_state.rediagnose_phase = None
 
 
 def _save_to_notion_with_retry(snapshot: dict[str, Any]) -> str:
@@ -873,9 +845,9 @@ def _render_results_panel(snap: dict[str, Any]) -> bool:
                 "output_format": str(snap.get("output_format") or OUTPUT_FORMAT_OPTIONS[0]),
                 "improvement_goals": list(snap.get("improvement_goals") or []),
             }
-            st.session_state.rediagnose_phase = "scrolling"
+            st.session_state.rediagnose_prefill_pending = True
+            st.session_state.auto_diagnose = True
             sync = False
-            st.session_state.auto_diagnose = False
             st.rerun()
 
     if st.session_state.get("notion_save_status") == "error":
@@ -948,7 +920,8 @@ def _render_history_entries(hist: list[Any]) -> None:
             f'<span class="pc-h-sum">{html.escape(prompt_summary)}</span>'
             f'<span class="pc-h-score">{html.escape(total_s)} / 100</span>'
             f'<span class="pc-h-badge {badge_cls}">{html.escape(fig_label)}</span>'
-            f'<button class="pc-h-toggle" type="button" data-b="{pos}">∨</button>'
+            f'<button class="pc-h-toggle" type="button" data-b="{pos}" '
+            f'aria-label="펼치기">{_HISTORY_ROW_CHEVRON_SVG}</button>'
             f"</div>"
             f'<div class="pc-h-body" data-c="{pos}">'
             f'<p>• <strong>원본 :</strong> {html.escape(orig)}</p>'
@@ -964,7 +937,7 @@ def _render_history_entries(hist: list[Any]) -> None:
 .pc-h-list {{ display:flex; flex-direction:column; gap:10px; }}
 .pc-h-item {{ border:1px solid #DEDEDE; border-radius:8px; background:#F6F6F6; }}
 .pc-h-head {{
-  display:grid; grid-template-columns:170px 1fr 95px 100px 26px; gap:10px;
+  display:grid; grid-template-columns:170px 1fr 95px 100px 20px; gap:10px;
   align-items:center; padding:10px 12px; cursor:pointer;
 }}
 .pc-h-time {{ color:#6B7280; font-size:12px; white-space:nowrap; }}
@@ -978,13 +951,19 @@ def _render_history_entries(hist: list[Any]) -> None:
 .pc-h-badge.yellow {{ background:#FFD700; }}
 .pc-h-badge.red {{ background:#D40924; }}
 .pc-h-toggle {{
-  border:none; background:transparent; color:#374151; font-size:16px; line-height:1;
-  width:22px; height:22px; cursor:pointer;
+  border:none; background:transparent; color:rgba(49,51,63,0.8); padding:0;
+  width:18px; height:18px; cursor:pointer;
+  display:inline-flex; align-items:center; justify-content:center;
+  flex-shrink:0;
+}}
+.pc-h-chevron {{
+  display:block;
+  transition: transform 0.2s ease;
 }}
 .pc-h-body {{ display:none; padding:0 12px 10px 12px; }}
 .pc-h-body p {{ margin:4px 0; font-size:12px; line-height:1.35; color:#111827; }}
 .pc-h-item.open .pc-h-body {{ display:block; }}
-.pc-h-item.open .pc-h-toggle {{ transform:rotate(180deg); }}
+.pc-h-item.open .pc-h-chevron {{ transform: rotate(180deg); }}
 </style>
 <div class="pc-h-list">
   {''.join(items)}
@@ -1031,17 +1010,6 @@ span[data-baseweb="tag"] {
 """,
         unsafe_allow_html=True,
     )
-    if st.session_state.get("rediagnose_phase") == "scrolling":
-        _scroll_and_rerun()
-        st.session_state.rediagnose_phase = "execute"
-        st.rerun()
-    if st.session_state.get("rediagnose_phase") == "execute":
-        st.session_state.rediagnose_prefill_pending = True
-        st.session_state.auto_diagnose = True
-        st.session_state.rediagnose_phase = None
-
-    if st.session_state.get("auto_diagnose"):
-        _scroll_to_top()
     if st.session_state.get("rediagnose_prefill_pending"):
         ctx = st.session_state.get("rediagnose_context") or {}
         st.session_state["prompt_name_input"] = str(ctx.get("prompt_name") or "")
@@ -1187,8 +1155,9 @@ span[data-baseweb="tag"] {
               "cursor:pointer;display:none;z-index:2147483000;box-shadow:0 8px 14px rgba(0,0,0,0.15);";
             doc.body.appendChild(btn);
             btn.addEventListener("click", function () {
-              try { window.parent.scrollTo({ top: 0, behavior: "smooth" }); } catch (e) {}
-              try { window.scrollTo({ top: 0, behavior: "smooth" }); } catch (e) {}
+              try {
+                if (window.top) window.top.scrollTo({ top: 0, behavior: "smooth" });
+              } catch (e) {}
             });
           }
           btn.textContent = "↑";
