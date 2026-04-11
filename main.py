@@ -8,6 +8,7 @@ import os
 import re
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Callable
 
 import streamlit as st
@@ -27,13 +28,15 @@ from utils.data_pipeline import sync_learning_data
 
 load_dotenv()
 
-OUTPUT_FORMAT_OPTIONS = ["글", "리스트", "표", "코드", "JSON"]
+# 와이어 기본값 "텍스트" — 과거 스냅샷의 "글"은 prefill 시 "텍스트"로 치환
+OUTPUT_FORMAT_OPTIONS = ["텍스트", "리스트", "표", "코드", "JSON"]
+_OUTPUT_FORMAT_LEGACY = {"글": "텍스트"}
 IMPROVEMENT_OPTIONS = [
     "토큰 줄이기",
     "일관성 높이기",
+    "맥락 보완",
     "출력 품질 높이기",
     "구조화",
-    "맥락 보완",
 ]
 
 CRITERION_LABELS = {
@@ -69,6 +72,37 @@ _HISTORY_ROW_CHEVRON_SVG = (
     'stroke-linecap="round" stroke-linejoin="round"/></svg>'
 )
 
+# 브랜드 마크: 말풍선(좌하 꼬리) 가로 그라데이션 채움 + 흰색 외곽선·청진기 라인
+_PC_BRAND_LOGO_SVG = """
+<svg class="pc-brand-svg" width="56" height="56" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+<defs>
+<linearGradient id="pcBrandFillGrad" x1="0" y1="32" x2="64" y2="32" gradientUnits="userSpaceOnUse">
+<stop stop-color="#7DD3FC"/><stop offset="1" stop-color="#5EEAD4"/>
+</linearGradient>
+</defs>
+<path d="M32 7C18.2 7 8 17.4 8 30.5c0 8.2 4.6 15.3 11.5 18.4L9 55l12.5-7.2c2.8.9 5.8 1.4 9 1.4 13.8 0 24-10.4 24-23.5S45.8 7 32 7z"
+fill="url(#pcBrandFillGrad)" stroke="#FFFFFF" stroke-width="2.2" stroke-linejoin="round"/>
+<path d="M23 24c2.2-4 6.6-6.5 11.5-6.5 4.2 0 8 2 10.3 5.2" stroke="#FFFFFF" stroke-width="2.4" fill="none" stroke-linecap="round"/>
+<path d="M26.5 24.5v11M37.5 24.5v11" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round"/>
+<circle cx="32" cy="40" r="5.2" stroke="#FFFFFF" stroke-width="2.3" fill="none"/>
+<path d="M32 34.8V30" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round"/>
+</svg>
+""".strip()
+
+_LOGO_PATH = Path(__file__).resolve().parent / "prompt_clinic_logo.png"
+
+
+def _brand_logo_html() -> str:
+    """리포지토리 루트의 PNG 로고; 없으면 인라인 SVG 폴백."""
+    if _LOGO_PATH.is_file():
+        b64 = base64.b64encode(_LOGO_PATH.read_bytes()).decode("ascii")
+        return (
+            f'<img class="pc-brand-img" src="data:image/png;base64,{b64}" '
+            'width="56" height="56" alt="" decoding="async" />'
+        )
+    return _PC_BRAND_LOGO_SVG
+
+
 # figma.html(와이어) 등급 배지 문구 — 앱 로직의 grade 문자열과 매핑만 함
 FIGMA_GRADE_BADGE: dict[str, tuple[str, str, str]] = {
     "우수": ("즉시사용가능", UI_BADGE_GREEN, "#ffffff"),
@@ -79,6 +113,36 @@ FIGMA_GRADE_BADGE: dict[str, tuple[str, str, str]] = {
 
 PROMPT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9가-힣._\- ]+$")
 
+
+def _normalize_output_format_option(val: str) -> str:
+    v = (val or "").strip()
+    return _OUTPUT_FORMAT_LEGACY.get(v, v)
+
+
+def _render_improvement_point_buttons() -> list[str]:
+    """와이어 태그 버튼 — 세션 키 improvement_goals_input 유지."""
+    if "improvement_goals_input" not in st.session_state:
+        st.session_state.improvement_goals_input = []
+    sel: list[str] = list(st.session_state.improvement_goals_input)
+    with st.container(key="pc_goal_pills"):
+        gc = st.columns(5, gap="small")
+        for i, opt in enumerate(IMPROVEMENT_OPTIONS):
+            with gc[i]:
+                active = opt in sel
+                if st.button(
+                    opt,
+                    key=f"pc_goal_btn_{i}",
+                    type="primary" if active else "secondary",
+                    use_container_width=True,
+                ):
+                    if active:
+                        st.session_state.improvement_goals_input = [
+                            x for x in sel if x != opt
+                        ]
+                    else:
+                        st.session_state.improvement_goals_input = [*sel, opt]
+                    st.rerun()
+    return list(st.session_state.get("improvement_goals_input") or [])
 
 
 def invoke_with_retry(
@@ -250,6 +314,279 @@ def _inject_pc_theme_css() -> None:
     st.markdown(
         f"""
 <style>
+@import url("https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css");
+.stApp {{
+  font-family: "Pretendard", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+}}
+[data-testid="stAppViewContainer"] > .main {{
+  background: #f8f8f8;
+}}
+section[data-testid="stSidebar"] {{
+  display: none !important;
+}}
+.st-key-pc_input_shell {{
+  background: #ffffff !important;
+  border: 1px solid {UI_BORDER_ALTO} !important;
+  border-radius: 8px !important;
+  padding: 0.5rem 0.25rem 1rem !important;
+}}
+@media (min-width: 640px) {{
+  .st-key-pc_input_shell {{
+    padding: 0.75rem 1rem 1.25rem !important;
+  }}
+}}
+.pc-wire-hero {{
+  margin: 0 0 1.35rem 0;
+}}
+.pc-wire-hero-row {{
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}}
+.pc-wire-brand-mark .pc-brand-svg,
+.pc-wire-brand-mark .pc-brand-img {{
+  display: block;
+  width: 56px;
+  height: 56px;
+}}
+.pc-wire-brand-mark .pc-brand-img {{
+  object-fit: contain;
+}}
+.pc-wire-brand-text {{
+  text-align: left;
+  min-width: 0;
+}}
+@media (max-width: 520px) {{
+  .pc-wire-hero-row {{
+    flex-direction: column;
+  }}
+  .pc-wire-brand-text {{
+    text-align: center;
+  }}
+}}
+.pc-wire-title {{
+  margin: 0;
+  font-size: 1.65rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: #0b0b0b;
+}}
+.pc-wire-desc {{
+  margin: 0.35rem 0 0;
+  font-size: 0.95rem;
+  font-weight: 500;
+  color: {UI_DOVE_GRAY};
+  line-height: 1.45;
+}}
+.pc-wire-section {{
+  margin: 0 0 0.85rem 0;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.25;
+  color: #0b0b0b;
+}}
+.pc-wire-muted {{
+  font-weight: 500;
+  font-size: 0.875rem;
+  color: {UI_DOVE_GRAY};
+}}
+.pc-char-right {{
+  text-align: right;
+  font-size: 11px;
+  line-height: 1.3;
+  color: #6c6c6c;
+  margin: -0.35rem 0 0.5rem 0;
+}}
+/* 개선 포인트 ↔ 진단 프롬프트 구분 (별도 hr markdown 제거 — 빈 element-container 방지) */
+.st-key-pc_input_shell .st-key-user_prompt_field {{
+  border-top: 1px solid {UI_BORDER_ALTO} !important;
+  margin-top: 1.25rem !important;
+  padding-top: 1.1rem !important;
+}}
+.pc-inline-err {{
+  color: {UI_BADGE_RED};
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0;
+}}
+/* S-04 진행·재시도·완료·API 오류 — 와이어 흰 박스 가운데 정렬 */
+.pc-phase-banner {{
+  background: #ffffff !important;
+  border: 1px solid {UI_BORDER_ALTO} !important;
+  border-radius: 10px !important;
+  padding: 12px 16px !important;
+  margin: 8px 0 12px 0 !important;
+  box-sizing: border-box !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  min-height: 48px !important;
+  text-align: center !important;
+}}
+.pc-phase-banner-text {{
+  font-size: 14px !important;
+  font-weight: 600 !important;
+  color: #0b0b0b !important;
+  line-height: 1.4 !important;
+}}
+.pc-label-row {{
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 0.35rem;
+}}
+.pc-wire-label-strong {{
+  font-weight: 700;
+  font-size: 16px;
+  color: #0b0b0b;
+  letter-spacing: -0.01em;
+}}
+.pc-char-user-prompt {{
+  text-align: right;
+  font-size: 11px;
+  line-height: 1.3;
+  color: #6c6c6c;
+  margin: 0.2rem 0 0.5rem 0;
+}}
+/* 개선 포인트: primary/secondary 동일 높이·작은 글자·한 줄 */
+.st-key-pc_goal_pills div[data-testid="stHorizontalBlock"] {{
+  gap: 0.2rem !important;
+  flex-wrap: nowrap !important;
+}}
+.st-key-pc_goal_pills div[data-testid="stColumn"] {{
+  min-width: 0 !important;
+  flex: 1 1 0 !important;
+  padding-left: 0.1rem !important;
+  padding-right: 0.1rem !important;
+}}
+.pc-goal-pill-row {{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin: 0.35rem 0 0.6rem 0;
+}}
+.st-key-pc_input_shell div[data-testid="stButton"] button[kind="secondary"] {{
+  background-color: #ffffff !important;
+  border: 1px solid {UI_BORDER_ALTO} !important;
+  color: #374151 !important;
+  border-radius: 999px !important;
+  font-weight: 600 !important;
+  font-size: 13px !important;
+  min-height: 36px !important;
+}}
+.st-key-pc_input_shell [data-baseweb="input"] input,
+.st-key-pc_input_shell [data-baseweb="textarea"] textarea {{
+  background-color: {UI_BEFORE_BG} !important;
+  border-color: {UI_BORDER_ALTO} !important;
+  border-radius: 6px !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05) !important;
+  font-size: 14px !important;
+}}
+.st-key-pc_input_shell [data-baseweb="select"] > div {{
+  background-color: {UI_BEFORE_BG} !important;
+  border-color: {UI_BORDER_ALTO} !important;
+  border-radius: 6px !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05) !important;
+}}
+/* 맥락 수집 2열: 라벨 줄 높이·컨트롤 상단선 수평 정렬 */
+.st-key-pc_context_row div[data-testid="stHorizontalBlock"] {{
+  align-items: flex-start !important;
+}}
+.st-key-pc_context_row .pc-context-field-label {{
+  display: block;
+  min-height: 24px;
+  margin-bottom: 6px;
+  line-height: 1.35;
+}}
+/* 맥락 수집: 위젯 래퍼 패딩 통일(높이 어긋남 방지) */
+.st-key-purpose_field [data-testid="element-container"],
+.st-key-output_format_field [data-testid="element-container"] {{
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+}}
+/* 사용목적 textarea ↔ 출력 형식 select 동일 박스(44px) + 리사이즈 제거 */
+.st-key-purpose_field textarea {{
+  resize: none !important;
+}}
+.st-key-purpose_field [data-baseweb="textarea"] {{
+  min-height: 44px !important;
+  height: 44px !important;
+  max-height: 44px !important;
+  box-sizing: border-box !important;
+  overflow: hidden !important;
+}}
+.st-key-purpose_field [data-baseweb="textarea"] textarea {{
+  resize: none !important;
+  min-height: 100% !important;
+  height: 100% !important;
+  max-height: 100% !important;
+  line-height: 1.35 !important;
+  padding: 9px 10px !important;
+  box-sizing: border-box !important;
+  overflow-y: auto !important;
+}}
+.st-key-purpose_field [data-baseweb="textarea"] textarea::-webkit-resizer {{
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}}
+.st-key-output_format_field [data-baseweb="select"] {{
+  min-height: 44px !important;
+  height: 44px !important;
+  max-height: 44px !important;
+  box-sizing: border-box !important;
+}}
+.st-key-output_format_field [data-baseweb="select"] > div {{
+  min-height: 44px !important;
+  height: 44px !important;
+  max-height: 44px !important;
+  box-sizing: border-box !important;
+  display: flex !important;
+  align-items: center !important;
+}}
+.st-key-pc_input_shell label[data-testid="stWidgetLabel"] p {{
+  font-size: 15px !important;
+  font-weight: 700 !important;
+  color: #0b0b0b !important;
+}}
+.st-key-pc_input_shell [data-testid="stMarkdownContainer"] p {{
+  font-size: 14px;
+}}
+.st-key-pc_input_shell div[data-testid="stButton"] button[kind="primary"] {{
+  background-color: {UI_PRIMARY_BLUE} !important;
+  border-color: {UI_PRIMARY_BLUE} !important;
+  color: #fff !important;
+  border-radius: 8px !important;
+  font-weight: 600 !important;
+  min-height: 38px !important;
+}}
+/* 진단 시작 제외: 개선 포인트 pill만 전역 primary/secondary 규칙 덮어쓰기 */
+.st-key-pc_input_shell .st-key-pc_goal_pills div[data-testid="stButton"] button {{
+  width: 100% !important;
+  min-height: 34px !important;
+  height: auto !important;
+  max-height: none !important;
+  padding: 4px 3px !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  line-height: 1.2 !important;
+  border-radius: 999px !important;
+  box-sizing: border-box !important;
+}}
+.st-key-pc_input_shell .st-key-pc_goal_pills div[data-testid="stButton"] button[kind="primary"] {{
+  background-color: {UI_PRIMARY_BLUE} !important;
+  border-color: {UI_PRIMARY_BLUE} !important;
+  color: #fff !important;
+}}
+.st-key-pc_input_shell .st-key-pc_goal_pills div[data-testid="stButton"] button[kind="secondary"] {{
+  background-color: #ffffff !important;
+  border: 1px solid {UI_BORDER_ALTO} !important;
+  color: #374151 !important;
+}}
 .pc-bullet-blue {{
   color: {UI_PRIMARY_BLUE};
   font-weight: 700;
@@ -353,12 +690,11 @@ div[data-testid="stHorizontalBlock"]:has([data-testid="stDownloadButton"])
   padding-top: 1rem;
 }}
 .block-container {{
-  max-width: 860px !important;
-  padding-top: 2.5rem !important;
+  max-width: 819px !important;
+  margin-left: auto !important;
+  margin-right: auto !important;
+  padding-top: 2rem !important;
   padding-bottom: 2rem !important;
-}}
-[data-testid="stSidebar"] {{
-  display: block !important;
 }}
 .pc-card {{
   background: #fff;
@@ -576,12 +912,23 @@ def _render_improvement_bullets(changes: list[dict[str, Any]]) -> None:
         )
 
 
-def _make_retry_cb(status: Any, step_label: str) -> Callable[[int, int], None]:
-    """st.status 재시도 콜백 팩토리."""
+def _pc_phase_banner(label: str) -> str:
+    """S-04 와이어: 흰 박스·연한 테두리·가운데 정렬."""
+    esc = html.escape(label, quote=False)
+    return (
+        f'<div class="pc-phase-banner">'
+        f'<span class="pc-phase-banner-text">{esc}</span></div>'
+    )
+
+
+def _make_retry_phase_cb(
+    phase_slot: Any, step_label: str
+) -> Callable[[int, int], None]:
+    """invoke_with_retry 시 동일 스타일 재시도 배너."""
     def on_retry(n: int, total: int) -> None:
-        status.update(
-            label=f"⚠️ {step_label} 재시도 중 ({n}/{total})...",
-            state="running",
+        phase_slot.markdown(
+            _pc_phase_banner(f"⚠️ {step_label} 재시도 중 ({n}/{total})..."),
+            unsafe_allow_html=True,
         )
     return on_retry
 
@@ -641,38 +988,61 @@ def _run_diagnosis(
         "improvement_goals": list(improvement_goals),
         "user_prompt": text,
     }
+    phase_slot: Any = None
     try:
-        with st.spinner("처리 중..."):
-            context_profile = invoke_with_retry(context_r.invoke, base_input)
-            merged = {**base_input, "context_profile": context_profile}
-            diagnosis = invoke_with_retry(diagnosis_r.invoke, merged)
-            weighted = apply_goal_weights(diagnosis, improvement_goals)
-            if routing.self_improve_enabled:
-                rewrite_openai_llm = build_openai_rewrite_llm(routing)
-                rewrite_opus_llm = build_opus_llm(routing)
-                _, _, rewrite_r_openai = build_chain_segments(rewrite_openai_llm)
-                rewrite_r_opus = None
-                if rewrite_opus_llm is not None:
-                    _, _, rewrite_r_opus = build_chain_segments(rewrite_opus_llm)
-                loop_result = invoke_with_retry(
-                    run_self_improve_loop,
-                    base_input=base_input,
-                    context_profile=context_profile,
-                    diagnosis_r=diagnosis_r,
-                    rewrite_r_openai=rewrite_r_openai,
-                    rewrite_r_opus=rewrite_r_opus,
-                    routing=routing,
-                    max_iters=routing.self_improve_max_iterations,
-                    invoke_with_retry_fn=invoke_with_retry,
-                    on_retry=None,
-                )
-                best = loop_result.get("best") or {}
-                rewrite = best.get("rewrite") or {}
-                weighted = best.get("weighted") or weighted
-                diagnosis = best.get("diagnosis_raw") or diagnosis
-            else:
-                merged = {**merged, "diagnosis": diagnosis}
-                rewrite = invoke_with_retry(rewrite_r.invoke, merged)
+        phase_slot = st.empty()
+
+        def _set_phase(msg: str) -> None:
+            phase_slot.markdown(_pc_phase_banner(msg), unsafe_allow_html=True)
+
+        # F-08-4: ux.html 4단계 — 프롬프트 분석 → 진단 → 개선안 → 완료
+        _set_phase("🔍 프롬프트 분석 중...")
+        context_profile = invoke_with_retry(
+            context_r.invoke,
+            base_input,
+            on_retry=_make_retry_phase_cb(phase_slot, "맥락 분석"),
+        )
+        merged = {**base_input, "context_profile": context_profile}
+        _set_phase("📊 진단 중...")
+        diagnosis = invoke_with_retry(
+            diagnosis_r.invoke,
+            merged,
+            on_retry=_make_retry_phase_cb(phase_slot, "진단"),
+        )
+        weighted = apply_goal_weights(diagnosis, improvement_goals)
+        if routing.self_improve_enabled:
+            _set_phase("✍️ 개선안 생성 중...")
+            rewrite_openai_llm = build_openai_rewrite_llm(routing)
+            rewrite_opus_llm = build_opus_llm(routing)
+            _, _, rewrite_r_openai = build_chain_segments(rewrite_openai_llm)
+            rewrite_r_opus = None
+            if rewrite_opus_llm is not None:
+                _, _, rewrite_r_opus = build_chain_segments(rewrite_opus_llm)
+            loop_result = invoke_with_retry(
+                run_self_improve_loop,
+                base_input=base_input,
+                context_profile=context_profile,
+                diagnosis_r=diagnosis_r,
+                rewrite_r_openai=rewrite_r_openai,
+                rewrite_r_opus=rewrite_r_opus,
+                routing=routing,
+                max_iters=routing.self_improve_max_iterations,
+                invoke_with_retry_fn=invoke_with_retry,
+                on_retry=_make_retry_phase_cb(phase_slot, "자가개선"),
+            )
+            best = loop_result.get("best") or {}
+            rewrite = best.get("rewrite") or {}
+            weighted = best.get("weighted") or weighted
+            diagnosis = best.get("diagnosis_raw") or diagnosis
+        else:
+            merged = {**merged, "diagnosis": diagnosis}
+            _set_phase("✍️ 개선안 생성 중...")
+            rewrite = invoke_with_retry(
+                rewrite_r.invoke,
+                merged,
+                on_retry=_make_retry_phase_cb(phase_slot, "개선안 생성"),
+            )
+
         improved = str(rewrite.get("improved_prompt", ""))
 
         st.session_state.last_snapshot = {
@@ -691,14 +1061,24 @@ def _run_diagnosis(
         st.session_state.history.append(st.session_state.last_snapshot)
         st.session_state.lc_chat_history.add_user_message(text[:300])
         st.session_state.lc_chat_history.add_ai_message(improved[:300])
-        st.success("진단이 완료되었습니다. 아래에서 결과를 확인하세요.")
+        st.session_state.pop("pc_pending_diagnosis", None)
+        if phase_slot is not None:
+            phase_slot.empty()
         if auto_trigger:
             st.session_state.auto_diagnose = False
     except Exception as e:
-        st.error(
-            "API 호출에 실패했습니다. 잠시 후 다시 시도해 주세요.\n\n"
-            f"상세: `{type(e).__name__}: {e}`"
+        if phase_slot is not None:
+            phase_slot.empty()
+        st.markdown(_pc_phase_banner("⚠️ API 오류"), unsafe_allow_html=True)
+        st.caption(
+            "재시도에 실패했습니다. 잠시 후 다시 시도해주세요. "
+            "API 호출 중 오류가 발생했습니다."
         )
+        with st.expander("오류 상세", expanded=False):
+            st.code(f"{type(e).__name__}: {e}")
+        if st.button("재시도", key="pc_diagnosis_api_retry", type="primary"):
+            st.session_state.pc_manual_retry_diagnosis = True
+            st.rerun()
         if auto_trigger:
             st.session_state.auto_diagnose = False
 
@@ -707,7 +1087,7 @@ def _render_results_panel(snap: dict[str, Any]) -> bool:
     """진단 결과 + 개선 결과 패널 렌더링.
 
     Returns:
-        sync_prompt_from_widget: 재진단 버튼이 클릭되면 False, 그 외 True.
+        sync_prompt_from_widget: 입력 위젯과 스냅샷 동기화 여부(항상 True).
     """
     sync = True
     weighted = snap["weighted"]
@@ -793,8 +1173,8 @@ def _render_results_panel(snap: dict[str, Any]) -> bool:
     notion_ready = bool(
         os.environ.get("NOTION_API_KEY") and os.environ.get("NOTION_DB_ID")
     )
-    ac1, ac2, ac3 = st.columns(3)
-    with ac1:
+    dl_col, notion_col = st.columns(2)
+    with dl_col:
         st.download_button(
             "⬇️ 리포트 다운로드 (.md)",
             data=md_body,
@@ -804,7 +1184,7 @@ def _render_results_panel(snap: dict[str, Any]) -> bool:
             use_container_width=True,
             key="download_report_md",
         )
-    with ac2:
+    with notion_col:
         if notion_ready:
             if st.button(
                 "🗂️ 프롬프트 아카이빙 (Notion)",
@@ -831,24 +1211,6 @@ def _render_results_panel(snap: dict[str, Any]) -> bool:
                     "사용할 수 있어요."
                 ),
             )
-    with ac3:
-        if st.button(
-            "개선된 프롬프트로 재진단",
-            type="primary",
-            key="redo_diagnose",
-            use_container_width=True,
-        ):
-            st.session_state.rediagnose_prompt = improved
-            st.session_state.rediagnose_context = {
-                "prompt_name": str(snap.get("prompt_name") or ""),
-                "purpose": str(snap.get("purpose") or ""),
-                "output_format": str(snap.get("output_format") or OUTPUT_FORMAT_OPTIONS[0]),
-                "improvement_goals": list(snap.get("improvement_goals") or []),
-            }
-            st.session_state.rediagnose_prefill_pending = True
-            st.session_state.auto_diagnose = True
-            sync = False
-            st.rerun()
 
     if st.session_state.get("notion_save_status") == "error":
         st.caption(
@@ -997,7 +1359,12 @@ def _render_history_entries(hist: list[Any]) -> None:
 
 def main() -> None:
     init_session()
-    st.set_page_config(page_title="Prompt Clinic", page_icon="🩺", layout="wide")
+    st.set_page_config(
+        page_title="Prompt Clinic",
+        page_icon="🩺",
+        layout="wide",
+        initial_sidebar_state="collapsed",
+    )
     _inject_pc_theme_css()
     st.markdown(
         """
@@ -1014,10 +1381,10 @@ span[data-baseweb="tag"] {
         ctx = st.session_state.get("rediagnose_context") or {}
         st.session_state["prompt_name_input"] = str(ctx.get("prompt_name") or "")
         st.session_state["purpose_input"] = str(ctx.get("purpose") or "")
-        fmt = str(ctx.get("output_format") or OUTPUT_FORMAT_OPTIONS[0])
-        st.session_state["output_format_input"] = (
-            fmt if fmt in OUTPUT_FORMAT_OPTIONS else OUTPUT_FORMAT_OPTIONS[0]
-        )
+        fmt = _normalize_output_format_option(str(ctx.get("output_format") or ""))
+        if not fmt or fmt not in OUTPUT_FORMAT_OPTIONS:
+            fmt = OUTPUT_FORMAT_OPTIONS[0]
+        st.session_state["output_format_input"] = fmt
         st.session_state["improvement_goals_input"] = list(
             ctx.get("improvement_goals") or []
         )
@@ -1025,49 +1392,179 @@ span[data-baseweb="tag"] {
             st.session_state.get("rediagnose_prompt") or ""
         )
         st.session_state.rediagnose_prefill_pending = False
-    st.title("🩺 Prompt Clinic")
-    st.caption("프롬프트를 진단하고 개선안을 제안합니다.")
-    with st.sidebar:
-        st.header("맥락 수집")
-        prompt_name = st.text_input(
-            "프롬프트 명",
-            placeholder="예: prompt_v1",
-            key="prompt_name_input",
-        )
-        st.caption("추후 프롬프트 다운로드 및 저장 시, 파일명으로 사용됩니다.")
-        purpose = st.text_area(
-            "프롬프트 사용목적",
-            placeholder="이 프롬프트를 어디에 사용하는지 적어주세요.",
-            height=100,
-            key="purpose_input",
-        )
-        output_format = st.selectbox(
-            "출력 형식",
-            OUTPUT_FORMAT_OPTIONS,
-            key="output_format_input",
-        )
-        improvement_goals = st.multiselect(
-            "개선 목적",
-            IMPROVEMENT_OPTIONS,
-            key="improvement_goals_input",
-        )
 
-    st.subheader("프롬프트 입력")
-    user_prompt = st.text_area(
-        "진단할 프롬프트",
-        height=220,
-        placeholder="프롬프트를 입력하세요...",
-        key="user_prompt_input",
+    st.markdown(
+        f"""
+<div class="pc-wire-hero">
+  <div class="pc-wire-hero-row">
+    <div class="pc-wire-brand-mark">{_brand_logo_html()}</div>
+    <div class="pc-wire-brand-text">
+      <h1 class="pc-wire-title">Prompt Clinic</h1>
+      <p class="pc-wire-desc">프롬프트를 진단하고, 개선합니다.</p>
+    </div>
+  </div>
+</div>
+""",
+        unsafe_allow_html=True,
     )
 
     auto_trigger = st.session_state.get("auto_diagnose", False)
     if auto_trigger:
         st.info("💡 개선된 프롬프트로 재진단을 시작합니다...")
 
-    _spacer, _run_col = st.columns([7.2, 1.4])
-    with _run_col:
-        run = st.button("진단 시작", type="primary", use_container_width=True)
+    with st.container(border=True, key="pc_input_shell"):
+        st.markdown(
+            '<span class="pc-wire-label-strong">프롬프트명</span>'
+            '<span class="pc-wire-muted"> (20자 이하, 추후 프롬프트 다운로드 및 '
+            "저장 시, 파일명으로 사용됩니다.)</span>",
+            unsafe_allow_html=True,
+        )
+        prompt_name = st.text_input(
+            "프롬프트명",
+            placeholder="예 : AI챗봇",
+            key="prompt_name_input",
+            label_visibility="collapsed",
+        )
+
+        st.markdown(
+            '<p class="pc-wire-section">맥락 수집</p>',
+            unsafe_allow_html=True,
+        )
+        with st.container(key="pc_context_row"):
+            col_purpose, col_fmt = st.columns([1.85, 1], vertical_alignment="top")
+            with col_purpose:
+                st.markdown(
+                    '<span class="pc-wire-muted pc-context-field-label">'
+                    "프롬프트 사용목적 (100자 이하)</span>",
+                    unsafe_allow_html=True,
+                )
+                with st.container(key="purpose_field"):
+                    purpose = st.text_area(
+                        "프롬프트 사용목적",
+                        placeholder="예 : 앱을 위한 기획서 작성",
+                        key="purpose_input",
+                        label_visibility="collapsed",
+                        height=44,
+                    )
+                st.markdown(
+                    f'<div class="pc-char-right">{len((purpose or ""))} / 100</div>',
+                    unsafe_allow_html=True,
+                )
+                if len((purpose or "")) > 100:
+                    st.markdown(
+                        '<p class="pc-inline-err">100자 이하로 입력해주세요.</p>',
+                        unsafe_allow_html=True,
+                    )
+            with col_fmt:
+                st.markdown(
+                    '<span class="pc-wire-label-strong pc-context-field-label">'
+                    "출력 형식</span>",
+                    unsafe_allow_html=True,
+                )
+                with st.container(key="output_format_field"):
+                    output_format = st.selectbox(
+                        "output_format_internal",
+                        OUTPUT_FORMAT_OPTIONS,
+                        key="output_format_input",
+                        label_visibility="collapsed",
+                    )
+
+        goals_err = len(st.session_state.get("improvement_goals_input") or []) == 0
+        st.markdown(
+            '<div class="pc-label-row">'
+            '<span class="pc-wire-muted" style="margin:0;">개선 포인트 (1개 이상 선택)</span>'
+            + (
+                '<span class="pc-inline-err">1개 이상 선택해주세요.</span>'
+                if goals_err
+                else ""
+            )
+            + "</div>",
+            unsafe_allow_html=True,
+        )
+        improvement_goals = _render_improvement_point_buttons()
+
+        _up_prev = str(st.session_state.get("user_prompt_input") or "")
+        _prompt_len_err_label = len(_up_prev) > 500
+        with st.container(key="user_prompt_field"):
+            st.markdown(
+                '<div class="pc-label-row">'
+                '<span class="pc-wire-label-strong" style="margin:0;">'
+                "진단할 프롬프트 (500자 이하)</span>"
+                + (
+                    '<span class="pc-inline-err">500자 이하로 작성해주세요.</span>'
+                    if _prompt_len_err_label
+                    else ""
+                )
+                + "</div>",
+                unsafe_allow_html=True,
+            )
+            user_prompt = st.text_area(
+                "진단할 프롬프트",
+                height=220,
+                placeholder="예 : 앱을 위한 기획서 작성해줘",
+                key="user_prompt_input",
+                label_visibility="collapsed",
+            )
+            st.markdown(
+                f'<div class="pc-char-user-prompt">'
+                f"{len((user_prompt or ''))} / 500</div>",
+                unsafe_allow_html=True,
+            )
+
+        p_len = len((purpose or ""))
+        t_len = len((user_prompt or ""))
+        pn = (prompt_name or "").strip()
+        purpose_ok = bool((purpose or "").strip()) and p_len <= 100
+        name_ok = (
+            bool(pn)
+            and len(pn) <= 20
+            and bool(PROMPT_NAME_PATTERN.fullmatch(pn))
+        )
+        prompt_ok = bool((user_prompt or "").strip()) and t_len <= 500
+        goals_ok = len(improvement_goals) > 0
+        key_ok = bool(os.environ.get("OPENAI_API_KEY"))
+        form_ready = name_ok and purpose_ok and prompt_ok and goals_ok and key_ok
+
+        err_purpose_border = p_len > 100
+        err_prompt_border = t_len > 500
+        st.markdown(
+            f"""
+<style>
+.st-key-purpose_field div[data-baseweb="input"] input,
+.st-key-purpose_field div[data-baseweb="textarea"] textarea {{
+  border-color: {'#d40924' if err_purpose_border else '#DEDEDE'} !important;
+}}
+.st-key-user_prompt_field div[data-baseweb="textarea"] textarea {{
+  border-color: {'#d40924' if err_prompt_border else '#DEDEDE'} !important;
+}}
+</style>
+""",
+            unsafe_allow_html=True,
+        )
+
+        _sp, run_col = st.columns([3.5, 1])
+        with run_col:
+            run = st.button(
+                "진단 시작",
+                type="primary",
+                use_container_width=True,
+                key="pc_run_diagnosis",
+                disabled=not form_ready and not auto_trigger,
+            )
     sync_prompt_from_widget = True
+
+    if st.session_state.get("pc_manual_retry_diagnosis"):
+        st.session_state.pc_manual_retry_diagnosis = False
+        pending = st.session_state.get("pc_pending_diagnosis")
+        if pending:
+            _run_diagnosis(
+                str(pending["prompt_name"]),
+                str(pending["purpose"]),
+                str(pending["output_format"]),
+                list(pending["improvement_goals"]),
+                str(pending["text"]),
+                False,
+            )
 
     if run or auto_trigger:
         text = (user_prompt or "").strip()
@@ -1093,7 +1590,7 @@ span[data-baseweb="tag"] {
             if auto_trigger:
                 st.session_state.auto_diagnose = False
         elif len(purpose_text) > 100:
-            st.error("프롬프트 사용목적은 100자 이하로 입력해 주세요.")
+            st.error("100자 이하로 입력해주세요.")
             if auto_trigger:
                 st.session_state.auto_diagnose = False
         elif not text:
@@ -1101,11 +1598,11 @@ span[data-baseweb="tag"] {
             if auto_trigger:
                 st.session_state.auto_diagnose = False
         elif len(text) > 500:
-            st.error("프롬프트는 500자 이하로 입력해 주세요.")
+            st.error("500자 이하로 작성해주세요.")
             if auto_trigger:
                 st.session_state.auto_diagnose = False
         elif not improvement_goals:
-            st.error("개선 목적을 하나 이상 선택해 주세요.")
+            st.error("1개 이상 선택해주세요.")
             if auto_trigger:
                 st.session_state.auto_diagnose = False
         elif not os.environ.get("OPENAI_API_KEY"):
@@ -1113,6 +1610,14 @@ span[data-baseweb="tag"] {
             if auto_trigger:
                 st.session_state.auto_diagnose = False
         else:
+            st.session_state["pc_pending_diagnosis"] = {
+                "prompt_name": prompt_name_text,
+                "purpose": purpose_text,
+                "output_format": output_format,
+                "improvement_goals": list(improvement_goals),
+                "text": text,
+                "auto_trigger": auto_trigger,
+            }
             _run_diagnosis(
                 prompt_name_text,
                 purpose_text,
@@ -1124,14 +1629,7 @@ span[data-baseweb="tag"] {
 
     snap = st.session_state.last_snapshot
     if snap:
-        st.markdown(
-            """
-<div style="background:#FFFFFF;border:1px solid #DEDEDE;border-radius:8px;padding:12px 16px;margin:8px 0 12px 0;text-align:center;font-size:14px;font-weight:600;color:#0B0B0B;">
-  ✅ 진단 완료!
-</div>
-""",
-            unsafe_allow_html=True,
-        )
+        st.markdown(_pc_phase_banner("✅ 진단 완료!"), unsafe_allow_html=True)
         sync_prompt_from_widget = _render_results_panel(snap)
 
     _render_history_panel()
