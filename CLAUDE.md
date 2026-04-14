@@ -12,11 +12,12 @@
 - `chains/rewrite_chain.py` : Chain 3 — 개선 프롬프트 생성
 - `chains/pipeline.py` : 기본 3체인 조립 (LCEL)
 - `chains/model_router.py` : 점수 기반 모델 라우팅(OpenAI ↔ Opus) 설정
-- `chains/self_improve_chain.py` : F-09 자가개선 루프(개선→재진단 반복)
+- `chains/self_improve_chain.py` : F-09 자가개선 루프(개선→재진단 반복) + `apply_goal_weights()` (목표 가중 점수 산출)
 - `utils/notion.py` : Notion 저장 + Notion few-shot 조회 유틸
 - `utils/data_pipeline.py` : 원천 실행로그(`prompt_runs.jsonl`) 적재 + few-shot 자동 갱신
 - `data/fewshot_examples.json` : 진단 체인 few-shot 예시(JSON, fallback)
 - `data/prompt_runs.jsonl` : 진단/개선 실행 원천 로그(JSONL, append-only)
+- `prompt_clinic_logo.png` : 브랜드 로고 PNG (없으면 인라인 SVG 폴백)
 - `.env` : API 키 및 라우팅 옵션 (git 제외)
 - `requirements.txt` : 의존성
 
@@ -221,3 +222,17 @@ git diff --stat HEAD
 - Notion/실행로그를 임베딩 인덱스로 변환
 - 레벨/점수/도메인 메타 필터 기반 retrieval
 - 진단/재작성 단계별 retrieval 전략 분리
+
+### D. Notion OAuth (사용자별 개인 DB 저장)
+- 현재는 팀 공용 Notion DB에 저장 (`.env`의 `NOTION_DB_ID` 고정)
+- 사용자 각자의 Notion 계정으로 OAuth 인증 후 개인 DB에 저장
+- 다중 사용자 환경 대응
+
+### E. Obsidian Vault 직접 연동
+- 현재 md 파일 다운로드 후 수동으로 Obsidian에 이동 (`build_markdown_report` → `st.download_button`)
+- Obsidian vault 경로 설정으로 직접 저장 자동화
+
+### F. 프롬프트 품질 트래킹 대시보드
+- `data/prompt_runs.jsonl` 데이터 기반 시각화
+- 사용자별/날짜별 점수 추이, 레벨 변화 그래프
+- 자주 약한 항목 패턴 분석
