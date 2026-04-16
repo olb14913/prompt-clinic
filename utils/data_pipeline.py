@@ -84,6 +84,8 @@ def build_run_record(snapshot: dict[str, Any]) -> dict[str, Any]:
         ts_text = ts_val.isoformat(timespec="seconds")
     else:
         ts_text = datetime.now().isoformat(timespec="seconds")
+    # F-25-3: 행위축·학문축 분류 결과 저장
+    domain_result: dict[str, Any] = snapshot.get("domain_result") or {}
     return {
         "ts": ts_text,
         "prompt_name": str(snapshot.get("prompt_name") or ""),
@@ -97,6 +99,8 @@ def build_run_record(snapshot: dict[str, Any]) -> dict[str, Any]:
         "scores": {key: str(_safe_int(score_map.get(key))) for key in CRITERION_KEYS},
         "prompt_level": level_info,
         "analysis_summary": _analysis_summary(weighted),
+        "domain_action": str(domain_result.get("domain_action") or ""),
+        "domain_knowledge": str(domain_result.get("domain_knowledge") or ""),
     }
 
 
@@ -135,11 +139,15 @@ def load_run_records(path: Path = PROMPT_RUNS_PATH) -> list[dict[str, Any]]:
     return records
 
 
-def _select_records_for_fewshot(
+def _level_balanced_pick(
     records: list[dict[str, Any]],
-    per_level_limit: int = 2,
-    max_examples: int = 8,
+    per_level_limit: int,
+    max_examples: int,
+    seen_prompts: set[str] | None = None,
 ) -> list[dict[str, Any]]:
+    """레벨 균형 선별 내부 헬퍼."""
+    if seen_prompts is None:
+        seen_prompts = set()
     grouped: dict[int, list[dict[str, Any]]] = {1: [], 2: [], 3: [], 4: []}
     for run in records:
         level = _safe_int((run.get("prompt_level") or {}).get("level"))
@@ -147,7 +155,6 @@ def _select_records_for_fewshot(
             grouped[level].append(run)
 
     selected: list[dict[str, Any]] = []
-    seen_prompts: set[str] = set()
     for level in [1, 2, 3, 4]:
         picked = 0
         for run in grouped[level]:
@@ -159,7 +166,42 @@ def _select_records_for_fewshot(
             picked += 1
             if picked >= per_level_limit:
                 break
+    return selected[:max_examples]
 
+
+def _select_records_for_fewshot(
+    records: list[dict[str, Any]],
+    per_level_limit: int = 2,
+    max_examples: int = 8,
+    domain_action: str = "",
+) -> list[dict[str, Any]]:
+    """F-25-3: 동일 행위축 사례 우선 선별 → 부족 시 전체 레벨 균형 fallback."""
+    seen_prompts: set[str] = set()
+
+    # 1단계: 동일 행위축 필터링 후 레벨 균형 선별
+    if domain_action:
+        same_axis = [r for r in records if r.get("domain_action") == domain_action]
+        if len(same_axis) >= 3:
+            selected = _level_balanced_pick(
+                same_axis, per_level_limit, max_examples, seen_prompts
+            )
+            if len(selected) >= 3:
+                return selected[:max_examples]
+            # 부족분 보충: fallback 추가 (아래로 계속)
+        else:
+            selected = _level_balanced_pick(
+                same_axis, per_level_limit, max_examples, seen_prompts
+            )
+    else:
+        selected = []
+
+    # 2단계: 전체 레코드에서 fallback (이미 선택된 프롬프트 제외)
+    fallback = _level_balanced_pick(
+        records, per_level_limit, max_examples - len(selected), seen_prompts
+    )
+    selected = selected + fallback
+
+    # 3단계: 최소 3개 보장
     if len(selected) < 3:
         for run in records:
             prompt = str(run.get("user_prompt") or "").strip()
@@ -169,6 +211,7 @@ def _select_records_for_fewshot(
             seen_prompts.add(prompt)
             if len(selected) >= 3:
                 break
+
     return selected[:max_examples]
 
 
@@ -191,6 +234,7 @@ def _record_to_fewshot_example(run: dict[str, Any]) -> dict[str, Any]:
         "level": level,
         "source": "auto",
         "collected_at": str(run.get("ts") or ""),
+        "domain_action": str(run.get("domain_action") or ""),
     }
 
 
@@ -209,11 +253,12 @@ def _load_existing_fewshot(path: Path = FEWSHOT_PATH) -> list[dict[str, Any]]:
 def refresh_fewshot_examples_from_runs(
     runs_path: Path = PROMPT_RUNS_PATH,
     fewshot_path: Path = FEWSHOT_PATH,
+    domain_action: str = "",
 ) -> bool:
     records = load_run_records(runs_path)
     if not records:
         return False
-    selected = _select_records_for_fewshot(records)
+    selected = _select_records_for_fewshot(records, domain_action=domain_action)
     examples = [_record_to_fewshot_example(run) for run in selected]
     if len(examples) < 3:
         existing = _load_existing_fewshot(fewshot_path)
@@ -242,7 +287,9 @@ def sync_learning_data(snapshot: dict[str, Any]) -> None:
     try:
         record = build_run_record(snapshot)
         append_run_record(record)
-        refresh_fewshot_examples_from_runs()
+        # F-25-3: 행위축 기반 few-shot 필터링
+        domain_action = str((snapshot.get("domain_result") or {}).get("domain_action") or "")
+        refresh_fewshot_examples_from_runs(domain_action=domain_action)
     except Exception:
         # 학습 데이터 적재 실패는 사용자 진단 결과를 막지 않는다.
         return

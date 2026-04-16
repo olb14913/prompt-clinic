@@ -950,6 +950,12 @@ def init_session() -> None:
         st.session_state.rediagnose_context = None
     if "rediagnose_prefill_pending" not in st.session_state:
         st.session_state.rediagnose_prefill_pending = False
+    if "original_prompt" not in st.session_state:
+        st.session_state.original_prompt = ""
+    if "data_consent" not in st.session_state:
+        st.session_state.data_consent = False
+    if "domain_result" not in st.session_state:
+        st.session_state.domain_result = None
 
 
 def _save_to_notion_with_retry(snapshot: dict[str, Any]) -> str:
@@ -978,6 +984,11 @@ def _run_diagnosis(
 ) -> None:
     """LLM 체인 실행 및 결과를 session_state에 저장."""
     st.session_state.notion_save_status = None
+    # F-15-3: 진단 실행 자체를 학습 데이터 활용 동의로 간주
+    st.session_state.data_consent = True
+    # F-23-1: 최초 진단 시에만 원본 프롬프트 잠금 (재진단·재시도에서 덮어쓰기 방지)
+    if not st.session_state.get("original_prompt"):
+        st.session_state.original_prompt = text
     routing = read_routing_config()
     temperature = routing.temperature
     llm = make_openai_llm(routing.openai_diagnosis_model, temperature)
@@ -1002,6 +1013,13 @@ def _run_diagnosis(
             base_input,
             on_retry=_make_retry_phase_cb(phase_slot, "맥락 분석"),
         )
+        # F-25-1: 도메인 2축 분류 결과를 session_state에 저장 (UI 노출 없음)
+        st.session_state.domain_result = {
+            "domain_action": (context_profile or {}).get("domain_action", ""),
+            "domain_knowledge": (context_profile or {}).get("domain_knowledge", ""),
+            "confidence_action": float((context_profile or {}).get("confidence_action", 0.0)),
+            "confidence_knowledge": float((context_profile or {}).get("confidence_knowledge", 0.0)),
+        }
         merged = {**base_input, "context_profile": context_profile}
         _set_phase("📊 진단 중...")
         diagnosis = invoke_with_retry(
@@ -1052,6 +1070,8 @@ def _run_diagnosis(
             "output_format": output_format,
             "improvement_goals": list(improvement_goals),
             "user_prompt": text,
+            "original_prompt": st.session_state.original_prompt,
+            "domain_result": st.session_state.domain_result,
             "context_profile": context_profile,
             "diagnosis_raw": diagnosis,
             "weighted": weighted,
@@ -1543,6 +1563,26 @@ span[data-baseweb="tag"] {
         )
 
         _sp, run_col = st.columns([3.5, 1])
+        with _sp:
+            _privacy_url = os.environ.get(
+                "PRIVACY_POLICY_URL",
+                "https://www.notion.so/Prompt-Clinic-34340cb3731d80eeb2d8cad538a3fe67",
+            )
+            _service_url = os.environ.get(
+                "SERVICE_POLICY_URL",
+                "https://www.notion.so/Prompt-Clinic-34340cb3731d80edb1cbefcf197078d7",
+            )
+            st.markdown(
+                f'<p style="font-size:11px;color:#6c6c6c;line-height:1.6;margin:0.45rem 0 0 0;">'
+                f"진단 결과는 서비스 개선을 위한 학습 데이터로 활용될 수 있습니다.<br>"
+                f'<a href="{_service_url}" target="_blank" rel="noopener noreferrer" '
+                f'style="color:{UI_PRIMARY_BLUE};text-decoration:none;">서비스 이용정책 →</a>'
+                f'&nbsp;&nbsp;'
+                f'<a href="{_privacy_url}" target="_blank" rel="noopener noreferrer" '
+                f'style="color:{UI_PRIMARY_BLUE};text-decoration:none;">개인정보처리방침 →</a>'
+                f"</p>",
+                unsafe_allow_html=True,
+            )
         with run_col:
             run = st.button(
                 "진단 시작",

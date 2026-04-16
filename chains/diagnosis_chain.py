@@ -63,6 +63,34 @@ class DiagnosisResult(BaseModel):
     grade: str = Field(description="우수/보통/개선필요 중 하나")
 
 
+# F-25-2: 행위축별 진단 4항목 채점 가중치 테이블 (비율 합계 = 100)
+# 키: domain_action 값 / 값: {criterion_key: weight_pct}
+DOMAIN_ACTION_WEIGHTS: dict[str, dict[str, int]] = {
+    "코드":   {"clarity": 20, "constraint": 40, "output_format": 20, "context": 20},
+    "요약":   {"clarity": 20, "constraint": 20, "output_format": 40, "context": 20},
+    "글쓰기": {"clarity": 25, "constraint": 20, "output_format": 25, "context": 30},
+    "분석":   {"clarity": 30, "constraint": 20, "output_format": 20, "context": 30},
+    "QA":    {"clarity": 40, "constraint": 20, "output_format": 20, "context": 20},
+}
+_DEFAULT_WEIGHTS: dict[str, int] = {
+    "clarity": 25, "constraint": 25, "output_format": 25, "context": 25,
+}
+_CRITERION_KO: dict[str, str] = {
+    "clarity": "명확성",
+    "constraint": "제약조건",
+    "output_format": "출력형식",
+    "context": "맥락반영도",
+}
+
+
+def _build_domain_weights_hint(domain_action: str) -> str:
+    """행위축별 채점 힌트 문자열 생성."""
+    weights = DOMAIN_ACTION_WEIGHTS.get(domain_action, _DEFAULT_WEIGHTS)
+    ranked = sorted(weights.items(), key=lambda x: x[1], reverse=True)
+    parts = [f"{_CRITERION_KO[k]}({v}%)" for k, v in ranked]
+    return f"행위축 [{domain_action or '일반'}] 채점 중점 순서: {' > '.join(parts)}"
+
+
 _EXPERT_SYSTEM_HEADER = """당신은 10년 경력의 프롬프트 엔지니어링 전문가입니다.
 사용자의 프롬프트를 명확성/제약조건/출력형식/맥락반영도 기준으로 객관적으로 진단하고,
 구체적인 개선안을 제시합니다.
@@ -82,12 +110,16 @@ DIAGNOSIS_HUMAN = """## 맥락 프로필 (JSON)
 ## 개선 목적 (사용자 선택)
 {improvement_goals_text}
 
+## 행위축 채점 가중치 힌트
+{domain_weights_hint}
+
 ## 진단 대상 프롬프트
 ```
 {user_prompt}
 ```
 
 위 프롬프트만을 근거로 네 기준을 각각 0~25점으로 채점하고, reason에는 CoT 형태의 원인 분석을 작성하세요.
+채점 시 위 행위축 가중치 힌트를 참고해 해당 행위에서 더 중요한 기준을 엄격하게 평가하세요.
 {format_instructions}"""
 
 
@@ -151,9 +183,11 @@ def build_diagnosis_chain(llm: ChatOpenAI):
 def prep_diagnosis_input(inputs: dict[str, Any]) -> dict[str, Any]:
     profile = inputs.get("context_profile") or {}
     goals = inputs.get("improvement_goals") or []
+    domain_action = str(profile.get("domain_action") or "")
     return {
         "context_profile_json": json.dumps(profile, ensure_ascii=False, indent=2),
         "output_format": inputs.get("output_format") or "",
         "improvement_goals_text": ", ".join(goals) if goals else "(선택 없음)",
+        "domain_weights_hint": _build_domain_weights_hint(domain_action),
         "user_prompt": inputs.get("user_prompt") or "",
     }
