@@ -35,6 +35,8 @@ class RoutingConfig:
     opus_threshold: int
     self_improve_enabled: bool
     self_improve_max_iterations: int
+    opus_max_calls: int
+    opus_max_tokens: int
 
 
 def read_routing_config() -> RoutingConfig:
@@ -52,6 +54,8 @@ def read_routing_config() -> RoutingConfig:
         opus_threshold=max(0, min(100, _env_int("OPUS_SCORE_THRESHOLD", 70))),
         self_improve_enabled=_env_bool("SELF_IMPROVE_ENABLED", False),
         self_improve_max_iterations=max(1, _env_int("SELF_IMPROVE_MAX_ITERS", 3)),
+        opus_max_calls=max(0, _env_int("OPUS_MAX_CALLS", 5)),
+        opus_max_tokens=max(0, _env_int("OPUS_MAX_TOKENS", 0)),
     )
 
 

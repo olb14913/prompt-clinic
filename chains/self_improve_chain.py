@@ -147,6 +147,33 @@ def get_persona_instruction(persona: str) -> str:
     return _PERSONA_INSTRUCTIONS.get(persona, "")
 
 
+def _count_tokens_approx(texts: list[str]) -> int:
+    """F-13-4: 텍스트 리스트의 토큰 수 추정. tiktoken 없으면 len//4 fallback."""
+    combined = " ".join(texts)
+    try:
+        import tiktoken
+        enc = tiktoken.encoding_for_model("gpt-4o")
+        return len(enc.encode(combined))
+    except Exception:
+        return len(combined) // 4
+
+
+def _opus_budget_exceeded(
+    calls_used: int,
+    tokens_used: int,
+    estimated_tokens: int,
+    routing: RoutingConfig,
+) -> bool:
+    """F-13-4: Opus 예산 초과 여부. 0은 무제한."""
+    if routing.opus_max_calls > 0 and calls_used >= routing.opus_max_calls:
+        return True
+    if routing.opus_max_tokens > 0 and (
+        tokens_used + estimated_tokens
+    ) > routing.opus_max_tokens:
+        return True
+    return False
+
+
 def _select_best_iteration(history: list[dict[str, Any]]) -> dict[str, Any]:
     """F-13-1: 이력에서 최적 이터레이션을 선택한다.
 
@@ -181,6 +208,8 @@ def run_self_improve_loop(
     current_prompt = str(base_input.get("user_prompt") or "")
     history: list[dict[str, Any]] = []
     prev_score = -1
+    opus_calls_used = 0
+    opus_tokens_used = 0
 
     for idx in range(max_iters):
         iter_no = idx + 1
@@ -199,6 +228,13 @@ def run_self_improve_loop(
             has_opus=rewrite_r_opus is not None,
             threshold=routing.opus_threshold,
         )
+        # F-13-4: Opus 예산 초과 시 OpenAI fallback
+        if model_key == "opus":
+            estimated = _count_tokens_approx([current_prompt])
+            if _opus_budget_exceeded(
+                opus_calls_used, opus_tokens_used, estimated, routing
+            ):
+                model_key = "openai"
         rewrite_r = rewrite_r_opus if model_key == "opus" else rewrite_r_openai
         if rewrite_r is None:
             rewrite_r = rewrite_r_openai
@@ -209,6 +245,10 @@ def run_self_improve_loop(
             rewrite_r.invoke,
             {**merged_for_diag, "diagnosis": diagnosis},
         )
+        # F-13-4: Opus 사용량 업데이트
+        if model_key == "opus":
+            opus_calls_used += 1
+            opus_tokens_used += _count_tokens_approx([current_prompt, str(rewrite)])
         improved = str(rewrite.get("improved_prompt") or "").strip()
         record = {
             "iteration": iter_no,
@@ -233,15 +273,31 @@ def run_self_improve_loop(
                 persona_hint = get_persona_instruction(persona)
                 if on_iteration is not None:
                     on_iteration(iter_no, max_iters, f"전략 전환 ({persona})")
+                # F-13-4: 페르소나 재시도 Opus 예산 체크
+                retry_model_key = model_key
+                retry_rewrite_r = rewrite_r
+                if retry_model_key == "opus":
+                    estimated_retry = _count_tokens_approx([current_prompt])
+                    if _opus_budget_exceeded(
+                        opus_calls_used, opus_tokens_used, estimated_retry, routing
+                    ):
+                        retry_model_key = "openai"
+                        retry_rewrite_r = rewrite_r_openai
                 try:
                     rewrite_retry = invoke_with_retry_fn(
-                        rewrite_r.invoke,
+                        retry_rewrite_r.invoke,
                         {
                             **merged_for_diag,
                             "diagnosis": diagnosis,
                             "persona_instruction": persona_hint,
                         },
                     )
+                    # F-13-4: 페르소나 재시도 Opus 사용량 업데이트
+                    if retry_model_key == "opus":
+                        opus_calls_used += 1
+                        opus_tokens_used += _count_tokens_approx(
+                            [current_prompt, str(rewrite_retry)]
+                        )
                     improved_retry = str(
                         rewrite_retry.get("improved_prompt") or ""
                     ).strip()
@@ -253,7 +309,7 @@ def run_self_improve_loop(
                             "diagnosis_raw": diagnosis,
                             "weighted": weighted,
                             "rewrite": rewrite_retry,
-                            "rewrite_model_key": model_key,
+                            "rewrite_model_key": retry_model_key,
                             "strategy": pattern,
                             "persona": persona,
                         }
