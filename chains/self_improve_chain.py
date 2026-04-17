@@ -2,11 +2,56 @@
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any, Callable
 
 from chains.model_router import RoutingConfig, model_key_to_label, resolve_rewrite_model_key
 
 CRITERION_KEYS = ["clarity", "constraint", "output_format", "context"]
+
+# ── F-22-1: 정체 패턴 상수 ──────────────────────────────────────────────────
+STAGNATION_SPINNING = "SPINNING"           # 동일 출력 반복
+STAGNATION_OSCILLATION = "OSCILLATION"    # A→B→A 교번
+STAGNATION_NO_DRIFT = "NO_DRIFT"          # 점수 변화 미미
+STAGNATION_DIMINISHING = "DIMINISHING_RETURNS"  # 개선율 지속 감소
+
+# ── F-22-2: 페르소나 상수 ───────────────────────────────────────────────────
+PERSONA_HACKER = "HACKER"
+PERSONA_RESEARCHER = "RESEARCHER"
+PERSONA_SIMPLIFIER = "SIMPLIFIER"
+PERSONA_ARCHITECT = "ARCHITECT"
+PERSONA_CONTRARIAN = "CONTRARIAN"
+
+_PATTERN_PERSONA_MAP: dict[str, str] = {
+    STAGNATION_SPINNING: PERSONA_HACKER,
+    STAGNATION_NO_DRIFT: PERSONA_RESEARCHER,
+    STAGNATION_OSCILLATION: PERSONA_ARCHITECT,
+    STAGNATION_DIMINISHING: PERSONA_SIMPLIFIER,
+}
+
+# ── F-22-3: 페르소나별 재작성 지시문 ────────────────────────────────────────
+_PERSONA_INSTRUCTIONS: dict[str, str] = {
+    PERSONA_HACKER: (
+        "기존 접근 방식을 완전히 무시하고 우회로를 찾으세요. "
+        "관습적인 표현 대신 새로운 구조와 표현을 시도하세요."
+    ),
+    PERSONA_RESEARCHER: (
+        "추가 맥락과 더 깊은 의미를 탐색하세요. "
+        "배경 정보, 전제 조건, 구체적인 예시를 적극적으로 포함시키세요."
+    ),
+    PERSONA_SIMPLIFIER: (
+        "불필요한 모든 요소를 제거하고 핵심만 남기세요. "
+        "가장 간결하고 명확한 표현으로 재구성하세요."
+    ),
+    PERSONA_ARCHITECT: (
+        "전체 구조를 재설계하세요. "
+        "현재의 논리적 흐름을 버리고 더 체계적인 구성으로 재건하세요."
+    ),
+    PERSONA_CONTRARIAN: (
+        "모든 가정을 뒤집고 반대 방향으로 접근하세요. "
+        "현재 방식의 약점을 역이용해 완전히 다른 관점으로 재작성하세요."
+    ),
+}
 
 GOAL_TO_CRITERIA: dict[str, list[str]] = {
     "토큰 줄이기": ["constraint", "clarity"],
@@ -52,6 +97,74 @@ def apply_goal_weights(diagnosis: dict[str, Any], goals: list[str]) -> dict[str,
     }
 
 
+def _prompt_hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def detect_stagnation_pattern(history: list[dict[str, Any]]) -> str | None:
+    """F-22-1: 자가개선 이력에서 정체 패턴을 감지한다.
+
+    반환값: 패턴 상수 문자열 또는 None (정체 없음)
+    """
+    if len(history) < 2:
+        return None
+
+    prompts = [str(r.get("improved_prompt") or "") for r in history]
+    scores = [
+        int((r.get("weighted") or {}).get("total_score") or 0) for r in history
+    ]
+
+    # SPINNING: 최근 2개 이상의 출력 프롬프트 해시 동일
+    if _prompt_hash(prompts[-1]) == _prompt_hash(prompts[-2]):
+        return STAGNATION_SPINNING
+
+    # OSCILLATION: 현재 프롬프트가 이전 히스토리에 이미 등장
+    current_hash = _prompt_hash(prompts[-1])
+    if any(_prompt_hash(p) == current_hash for p in prompts[:-1]):
+        return STAGNATION_OSCILLATION
+
+    # NO_DRIFT: 최근 2회 점수 변화가 epsilon(1점) 미만
+    if abs(scores[-1] - scores[-2]) < 1:
+        return STAGNATION_NO_DRIFT
+
+    # DIMINISHING_RETURNS: 최근 3회 개선량이 연속 감소
+    if len(scores) >= 3:
+        delta_prev = scores[-2] - scores[-3]
+        delta_curr = scores[-1] - scores[-2]
+        if delta_curr < delta_prev and delta_curr <= 0:
+            return STAGNATION_DIMINISHING
+
+    return None
+
+
+def select_persona_for_pattern(pattern: str) -> str:
+    """F-22-2: 정체 패턴에 대응하는 페르소나를 반환한다."""
+    return _PATTERN_PERSONA_MAP.get(pattern, PERSONA_CONTRARIAN)
+
+
+def get_persona_instruction(persona: str) -> str:
+    """F-22-3: 페르소나 이름으로 재작성 지시문을 반환한다."""
+    return _PERSONA_INSTRUCTIONS.get(persona, "")
+
+
+def _select_best_iteration(history: list[dict[str, Any]]) -> dict[str, Any]:
+    """F-13-1: 이력에서 최적 이터레이션을 선택한다.
+
+    선택 기준:
+    1. total_score 내림차순 (높을수록 우선)
+    2. 동점 시 iteration 내림차순 (나중 이터레이션 = 더 정제된 결과)
+    """
+    if not history:
+        return {}
+    return max(
+        history,
+        key=lambda r: (
+            int((r.get("weighted") or {}).get("total_score") or 0),
+            int(r.get("iteration") or 0),
+        ),
+    )
+
+
 def run_self_improve_loop(
     *,
     base_input: dict[str, Any],
@@ -66,7 +179,6 @@ def run_self_improve_loop(
 ) -> dict[str, Any]:
     """개선→재진단 반복 후 최고점 결과를 반환한다."""
     current_prompt = str(base_input.get("user_prompt") or "")
-    best_payload: dict[str, Any] | None = None
     history: list[dict[str, Any]] = []
     prev_score = -1
 
@@ -106,22 +218,60 @@ def run_self_improve_loop(
             "weighted": weighted,
             "rewrite": rewrite,
             "rewrite_model_key": model_key,
+            "strategy": "default",
+            "persona": "",
         }
         history.append(record)
-        if best_payload is None:
-            best_payload = record
-        else:
-            best_score = int((best_payload.get("weighted") or {}).get("total_score") or 0)
-            if score > best_score:
-                best_payload = record
 
         # 점수 향상이 없거나 개선 결과가 비어 있으면 조기 종료
-        if score <= prev_score or not improved or improved == current_prompt:
+        stagnant = score <= prev_score or not improved or improved == current_prompt
+        if stagnant:
+            # F-13-2: 정체 감지 → 페르소나 전략으로 1회 재시도
+            pattern = detect_stagnation_pattern(history)
+            if pattern is not None:
+                persona = select_persona_for_pattern(pattern)
+                persona_hint = get_persona_instruction(persona)
+                if on_iteration is not None:
+                    on_iteration(iter_no, max_iters, f"전략 전환 ({persona})")
+                try:
+                    rewrite_retry = invoke_with_retry_fn(
+                        rewrite_r.invoke,
+                        {
+                            **merged_for_diag,
+                            "diagnosis": diagnosis,
+                            "persona_instruction": persona_hint,
+                        },
+                    )
+                    improved_retry = str(
+                        rewrite_retry.get("improved_prompt") or ""
+                    ).strip()
+                    if improved_retry and improved_retry != current_prompt:
+                        retry_record = {
+                            "iteration": iter_no,
+                            "input_prompt": current_prompt,
+                            "improved_prompt": improved_retry,
+                            "diagnosis_raw": diagnosis,
+                            "weighted": weighted,
+                            "rewrite": rewrite_retry,
+                            "rewrite_model_key": model_key,
+                            "strategy": pattern,
+                            "persona": persona,
+                        }
+                        history.append(retry_record)
+                        current_prompt = improved_retry
+                        prev_score = score
+                        continue
+                except Exception:
+                    pass
             break
         prev_score = score
         current_prompt = improved
 
+    # F-13-1: 루프 종료 후 최적 이터레이션 선택
+    best = _select_best_iteration(history)
+    best_iter_no = int(best.get("iteration") or 0)
     return {
-        "best": best_payload or {},
+        "best": best,
         "history": history,
+        "best_iteration_no": best_iter_no,
     }

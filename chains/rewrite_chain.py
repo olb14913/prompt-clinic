@@ -42,7 +42,7 @@ REWRITE_HUMAN = """## 맥락 프로필
 ```
 {user_prompt}
 ```
-
+{persona_instruction}
 진단과 맥락·개선 목적을 모두 반영해 프롬프트를 재작성하고, 변경 이유를 changes에 정리하세요.
 {format_instructions}"""
 
@@ -63,9 +63,12 @@ def prep_rewrite_input(inputs: dict[str, Any]) -> dict[str, Any]:
     profile = inputs.get("context_profile") or {}
     diagnosis = inputs.get("diagnosis") or {}
     goals = inputs.get("improvement_goals") or []
+    persona_instruction = str(inputs.get("persona_instruction") or "").strip()
+    hint_block = f"\n## 재작성 전략 힌트\n{persona_instruction}\n" if persona_instruction else ""
     return {
         "context_profile_json": json.dumps(profile, ensure_ascii=False, indent=2),
         "diagnosis_json": json.dumps(diagnosis, ensure_ascii=False, indent=2),
         "improvement_goals_text": ", ".join(goals) if goals else "(선택 없음)",
         "user_prompt": inputs.get("user_prompt") or "",
+        "persona_instruction": hint_block,
     }

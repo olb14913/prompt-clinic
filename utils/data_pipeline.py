@@ -27,6 +27,16 @@ def _safe_int(value: Any) -> int:
         return 0
 
 
+def _count_tokens(text: str) -> int:
+    """F-13-5: tiktoken으로 토큰 수 카운팅. 미설치/오류 시 0 반환."""
+    try:
+        import tiktoken
+        enc = tiktoken.encoding_for_model("gpt-4o")
+        return len(enc.encode(text))
+    except Exception:
+        return 0
+
+
 def _ensure_data_dir() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -102,6 +112,10 @@ def build_run_record(snapshot: dict[str, Any]) -> dict[str, Any]:
         "domain_action": str(domain_result.get("domain_action") or ""),
         "domain_knowledge": str(domain_result.get("domain_knowledge") or ""),
         "drift_score": float(snapshot.get("drift_score") or 0.0),
+        "before_token_count": _count_tokens(str(snapshot.get("user_prompt") or "")),
+        "after_token_count": _count_tokens(
+            str((snapshot.get("rewrite") or {}).get("improved_prompt") or "")
+        ),
     }
 
 
