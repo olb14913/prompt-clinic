@@ -1597,6 +1597,7 @@ span[data-baseweb="tag"] {
             placeholder="예 : AI챗봇",
             key="prompt_name_input",
             label_visibility="collapsed",
+            max_chars=20,       
         )
 
         st.markdown(
@@ -1618,6 +1619,7 @@ span[data-baseweb="tag"] {
                         key="purpose_input",
                         label_visibility="collapsed",
                         height=44,
+                        max_chars=100,
                     )
                 st.markdown(
                     f'<div class="pc-char-right">{len((purpose or ""))} / 100</div>',
@@ -1677,6 +1679,7 @@ span[data-baseweb="tag"] {
                 placeholder="예 : 앱을 위한 기획서 작성해줘",
                 key="user_prompt_input",
                 label_visibility="collapsed",
+                max_chars=500,
             )
             st.markdown(
                 f'<div class="pc-char-user-prompt">'
