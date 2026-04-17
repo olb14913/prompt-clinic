@@ -116,6 +116,8 @@ def build_run_record(snapshot: dict[str, Any]) -> dict[str, Any]:
         "after_token_count": _count_tokens(
             str((snapshot.get("rewrite") or {}).get("improved_prompt") or "")
         ),
+        "loop_history": list(snapshot.get("loop_history") or []),
+        "best_iteration_no": snapshot.get("best_iteration_no"),
     }
 
 
