@@ -148,15 +148,24 @@ def _load_docs_from_fewshot() -> list[tuple[str, dict[str, str]]]:
 
 
 def _load_docs_from_guides() -> list[tuple[str, dict[str, str]]]:
-    """data/guides/ PDF → 청킹 후 (text, metadata) 리스트. domain_knowledge: "일반"."""
+    """data/guides/ PDF/MD/TXT → 청킹 후 (text, metadata). domain_knowledge: '일반'."""
     if not GUIDES_DIR.exists():
         return []
+    allowed_ext = {".pdf", ".md", ".txt"}
     docs: list[tuple[str, dict[str, str]]] = []
-    for pdf_path in sorted(GUIDES_DIR.glob("*.pdf")):
-        markdown = _pdf_to_markdown(pdf_path)
-        if not markdown.strip():
+    for file_path in sorted(GUIDES_DIR.iterdir()):
+        if file_path.name.startswith(".") or file_path.suffix not in allowed_ext:
             continue
-        for chunk in _chunk_text(markdown):
+        if file_path.suffix == ".pdf":
+            text = _pdf_to_markdown(file_path)
+        else:
+            try:
+                text = file_path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+        if not text.strip():
+            continue
+        for chunk in _chunk_text(text):
             if not chunk.strip():
                 continue
             meta: dict[str, str] = {

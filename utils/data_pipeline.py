@@ -57,6 +57,15 @@ def _score_to_hint(score: int) -> str:
     return "낮음"
 
 
+def _score_to_quality_tag(score: int) -> str:
+    """F-15-1: 80점↑ → good, 40점↓ → bad, 그 외 → neutral."""
+    if score >= 80:
+        return "good"
+    if score <= 40:
+        return "bad"
+    return "neutral"
+
+
 def infer_prompt_level(total_score: int) -> dict[str, Any]:
     if total_score >= 80:
         return {"level": 4, "label": "전문가"}
@@ -118,6 +127,7 @@ def build_run_record(snapshot: dict[str, Any]) -> dict[str, Any]:
         ),
         "loop_history": list(snapshot.get("loop_history") or []),
         "best_iteration_no": snapshot.get("best_iteration_no"),
+        "quality_tag": _score_to_quality_tag(total_score),
     }
 
 
