@@ -308,6 +308,24 @@ def refresh_fewshot_examples_from_runs(
     return True
 
 
+def _refresh_fewshot_from_notion() -> bool:
+    """F-10-6: Notion fewshot DB → 로컬 fewshot_examples.json 갱신.
+
+    NOTION_FEWSHOT_ENABLED=false 시 skip (load_fewshot_examples_from_notion 내부 guard).
+    결과 없으면 기존 파일 유지. 실패 시 False 반환.
+    """
+    from utils.notion import load_fewshot_examples_from_notion
+    examples = load_fewshot_examples_from_notion()
+    if not examples:
+        return False
+    _ensure_data_dir()
+    FEWSHOT_PATH.write_text(
+        json.dumps(examples, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return True
+
+
 def sync_learning_data(snapshot: dict[str, Any]) -> None:
     if not isinstance(snapshot, dict):
         return
@@ -322,6 +340,8 @@ def sync_learning_data(snapshot: dict[str, Any]) -> None:
         data_consent = bool(snapshot.get("data_consent", True))
         if data_consent and str(record.get("quality_tag") or "") in {"good", "bad"}:
             push_fewshot_record(record)
+        # F-10-6: Notion pull-back → 로컬 fewshot_examples.json 갱신
+        _refresh_fewshot_from_notion()
     except Exception:
         # 학습 데이터 적재 실패는 사용자 진단 결과를 막지 않는다.
         return
