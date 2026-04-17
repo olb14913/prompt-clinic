@@ -8,20 +8,23 @@
 ## 파일 역할 (최신)
 - `main.py` : Streamlit UI, 세션 관리, 진단 실행 오케스트레이션
 - `chains/context_chain.py` : Chain 1 — 맥락 프로필 생성 + F-25-1 도메인 2축 분류
-- `chains/diagnosis_chain.py` : Chain 2 — 4항목 진단 + Few-shot 로드 + F-25-2 행위축 가중치
-- `chains/rewrite_chain.py` : Chain 3 — 개선 프롬프트 생성 (persona_instruction 선택 주입)
+- `chains/diagnosis_chain.py` : Chain 2 — 4항목 진단 + Few-shot 로드 + F-25-2 행위축 가중치 + F-16-3 RAG 주입
+- `chains/rewrite_chain.py` : Chain 3 — 개선 프롬프트 생성 (persona_instruction 선택 주입) + F-16-3 RAG 주입
 - `chains/pipeline.py` : 기본 3체인 조립 (LCEL)
 - `chains/model_router.py` : 점수 기반 모델 라우팅(OpenAI ↔ Opus) 설정
 - `chains/self_improve_chain.py` : F-09/F-13 자가개선 루프 + Best-of-N + 전략/페르소나 전환(F-22-1/2/3 통합)
 - `chains/gate_chain.py` : F-20-1/2/3 모호성 게이트 체인 + 소크라테스 질문 체인
 - `chains/drift_chain.py` : F-23-2 의도 드리프트 점수 산출 (3축 보존도 평가)
-- `utils/notion.py` : Notion 저장 + Notion few-shot 조회 유틸
-- `utils/data_pipeline.py` : 원천 실행로그(`prompt_runs.jsonl`) 적재 + few-shot 자동 갱신
+- `utils/notion.py` : Notion 저장 + Notion few-shot 조회 + F-15-2 fewshot DB write-back
+- `utils/data_pipeline.py` : 원천 실행로그(`prompt_runs.jsonl`) 적재 + few-shot 자동 갱신 + F-15-1 quality_tag 태깅
+- `utils/vector_store.py` : F-16-1 Chroma Vector DB 구축 + F-16-3 search_diagnosis/search_rewrite
 - `data/fewshot_examples.json` : 진단 체인 few-shot 예시(JSON, fallback)
 - `data/prompt_runs.jsonl` : 진단/개선 실행 원천 로그(JSONL, append-only)
+- `data/guides/` : 외부 가이드북 PDF/MD/TXT (수동 관리, 재작성 인덱스 대상, domain_knowledge: "일반")
+- `data/wiki/{domain}/` : 도메인별 LLM Wiki (medical/law/design/coding/science/marketing/general)
 - `prompt_clinic_logo.png` : 브랜드 로고 PNG (없으면 인라인 SVG 폴백)
 - `.env` : API 키 및 라우팅 옵션 (git 제외)
-- `requirements.txt` : 의존성 (tiktoken 포함)
+- `requirements.txt` : 의존성 (tiktoken, chromadb, langchain-community, markitdown 포함)
 
 ---
 
@@ -34,6 +37,7 @@
 | F-02-4 | 진단 원인 설명을 14점 이하 항목만 표시 → 전체 항목 표시로 변경 | 팀장님 피드백 반영, 회의 결정사항 (2026-04-09) |
 | F-20-2 | v0.2 설계(버튼 비활성화) → 안내 배너만 표시로 변경 | 진단 버튼 강제 차단 없음 원칙 적용. 사용자 흐름 보장 |
 | F-20-4 | 독립 UI 컴포넌트 폐기 → F-13-3 대기 화면 내 통합 | 별도 UI 불필요. 루프 진행 상태 인디케이터로 통합 |
+| F-16-5 | RAG 토큰 절감 시각화 UI 미구현 → jsonl 데이터 저장으로 대체 완료 처리 | before/after_token_count 이미 축적 중. 데이터 충분 시 통계 활용 예정 |
 
 ## UI/UX 동결 규칙 — 절대 건드리지 말 것
 - 레이아웃, 컬러, 폰트, 컴포넌트 배치, 여백 등 시각적 요소 수정 금지
@@ -70,17 +74,17 @@ OPUS_SCORE_THRESHOLD=70
 ANTHROPIC_API_KEY=               # Opus 활성화 시 필수
 ANTHROPIC_MODEL_OPUS=claude-3-opus-20240229
 
-# Notion 저장
+# Notion 저장 (진단 결과 수동 아카이빙)
 NOTION_API_KEY=secret_...
 NOTION_DB_ID=...
 
 # Notion few-shot source (기본 OFF)
 FEWSHOT_SOURCE_NOTION=false
 NOTION_FEWSHOT_ENABLED=false
-NOTION_FEWSHOT_DB_ID=
+NOTION_FEWSHOT_DB_ID=            # F-15-2 good/bad write-back 대상 DB (미설정 시 skip)
 NOTION_FEWSHOT_PER_LEVEL=2
 
-# F-16 RAG (기본 OFF — Phase 4 구현 후 활성화)
+# F-16 RAG (기본 OFF — RAG_ENABLED=true로 변경 시 build_index() 먼저 실행 필요)
 RAG_ENABLED=false
 ```
 
@@ -100,6 +104,7 @@ chains/gate_chain.py
 chains/drift_chain.py
 utils/notion.py
 utils/data_pipeline.py
+utils/vector_store.py
 requirements.txt
 ```
 
@@ -172,22 +177,22 @@ requirements.txt
 - [x] F-10-3 run 로그 기반 `fewshot_examples.json` 자동 갱신
 - [x] F-10-4 Notion few-shot 동적 로드(환경변수 ON 시)
 - [x] F-10-5 레벨 균형 + 고득점 우선 few-shot 샘플링
-- [ ] F-10-6 Notion에서 좋은/나쁜 사례 자동 write-back 루프
+- [ ] F-10-6 Notion에서 좋은/나쁜 사례 자동 write-back 루프 — **다음 작업 예정**
 
 ### F-12 레벨 뱃지 UI — ⛔ 폐기
 > v0.2 범위에서 제외. 레벨 판정 로직(data_pipeline.py)은 내부 지표로만 활용.
 
-### F-13 자가개선 루프 고도화
+### F-13 자가개선 루프 고도화 — ✅ Phase 3 완료
 - [x] F-13-1 Best-of-N 선택 로직 (`_select_best_iteration()` — total_score 기준, 동점 시 later iter 우선)
 - [x] F-13-2 전략 전환 트리거 + 페르소나 회전 (F-22-1/2/3 통합 — 4가지 정체 패턴 감지 → 5가지 페르소나 매핑)
 - [x] F-13-3 반복 이력 카드 UI (`SELF_IMPROVE_ENABLED=true` 시 활성, F-20-4 통합)
 - [ ] F-13-4 점수 추이 미니 차트 (`st.line_chart` 인라인 시각화) — 보류
 - [x] F-13-5 tiktoken 토큰 카운팅 (UI 없음. `before_token_count`/`after_token_count` jsonl 저장)
 
-### F-15 학습 데이터 자동화
+### F-15 학습 데이터 자동화 — ✅ Phase 5 완료
+- [x] F-15-1 우수/불량 사례 자동 태깅 (`_score_to_quality_tag()` — 80점↑ good / 40점↓ bad / 나머지 neutral)
+- [x] F-15-2 Notion few-shot DB write-back (`push_fewshot_record()` — good/bad만, NOTION_FEWSHOT_DB_ID 필요)
 - [x] F-15-3 학습 데이터 수집 동의 (진단 실행 자체를 동의로 간주, 정책 URL 링크 상시 노출)
-- [ ] F-15-1 우수/불량 사례 자동 태깅 (80점↑ → good, 40점↓ → bad)
-- [ ] F-15-2 Notion few-shot DB write-back
 
 ### F-20 품질게이트 (모호성 게이팅)
 > `chains/gate_chain.py` 신규. 진단 버튼 강제 차단 없음 — 안내 배너 + 소크라테스 질문만.
@@ -222,26 +227,24 @@ requirements.txt
 - ⛔ F-25-4 도메인 표시 UI — 내부 처리 전용, UI 제외
 - [ ] F-25-5 소크라테스 질문 기반 맥락 보완 재진단 (F-20-3 연동, 보류)
 
-### F-16 RAG 인프라 — Phase 4 예정
-- [ ] F-16-1 통합 Vector DB 인덱스 구축 (`utils/vector_store.py` 신규, Chroma)
-- [ ] F-16-3 체인별 분리 인덱스 운영 (Chain 2: 행위축 필터 / Chain 3: 학문축 필터)
-- [ ] F-16-4 RAG 정량적 성능 지표 (개발자용, 0.2 완료 후 착수)
-- [ ] F-16-5 RAG 토큰 절감 시각화 (사용자용, F-13-5 tiktoken 연계)
+### F-16 RAG 인프라 — ✅ Phase 4 완료
+> `utils/vector_store.py` 신규. `RAG_ENABLED=false` 기본값 — 활성화 전 `build_index()` 먼저 실행 필요.
+- [x] F-16-1 통합 Vector DB 인덱스 구축 (`utils/vector_store.py`, Chroma)
+  - 진단 컬렉션: `prompt_runs.jsonl` + `fewshot_examples.json` (행위축 필터)
+  - 재작성 컬렉션: `data/guides/` PDF/MD/TXT + `data/wiki/{domain}/` + `fewshot_examples.json` (학문축 필터)
+- [x] F-16-3 체인별 분리 인덱스 운영 (Chain 2: `search_diagnosis()` / Chain 3: `search_rewrite()`)
+- [ ] F-16-4 RAG 정량적 성능 지표 — **0.2 개발 완료 후 착수**
+- [x] F-16-5 RAG 토큰 절감 — UI 없음. `before/after_token_count` jsonl 축적으로 완료 처리. 데이터 충분 시 통계 활용 예정
 
 ---
 
 ## 미구현/보류 항목 요약
 | 기능 ID | 파일 | 내용 | 상태 |
 |---------|------|------|------|
-| F-10-6 | utils/notion.py, utils/data_pipeline.py | Notion good/bad 사례 자동 write-back | ⏳ |
+| F-10-6 | utils/notion.py, utils/data_pipeline.py | Notion good/bad 사례 자동 write-back 루프 | **다음 작업 예정** |
 | F-13-4 | main.py | 점수 추이 미니 차트 (`st.line_chart`) | 보류 |
-| F-15-1 | utils/data_pipeline.py | 우수/불량 사례 자동 태깅 (80점↑ good / 40점↓ bad) | ⏳ |
-| F-15-2 | utils/notion.py | Notion few-shot DB write-back | ⏳ |
+| F-16-4 | prompt_runs.jsonl 필드 확장 | RAG 정량 성능 지표 (latency, 적중률) | 0.2 완료 후 착수 |
 | F-25-5 | main.py, chains/ | 소크라테스 질문 기반 맥락 보완 재진단 | 보류 |
-| F-16-1 | utils/vector_store.py (신규) | Chroma Vector DB 인덱스 구축 | **Phase 4 착수 예정** |
-| F-16-3 | chains/diagnosis_chain.py, chains/rewrite_chain.py | 체인별 분리 인덱스 운영 | F-16-1 완료 후 |
-| F-16-4 | prompt_runs.jsonl 필드 확장 | RAG 정량 성능 지표 | F-16-3 완료 후 |
-| F-16-5 | main.py | RAG 토큰 절감 시각화 | F-16-3 완료 후 |
 
 ---
 
@@ -283,6 +286,7 @@ requirements.txt
 | `after_token_count` | int | 개선 프롬프트 토큰 수 (tiktoken) |
 | `loop_history` | list | 자가개선 루프 이력 (strategy/persona 포함) |
 | `best_iteration_no` | int\|null | 최고점 이터레이션 번호 |
+| `quality_tag` | str | F-15-1 자동 태깅 결과 (good/bad/neutral) |
 
 ---
 
@@ -317,29 +321,21 @@ git diff --stat HEAD
 
 ## 향후 업그레이드 계획 (최신)
 
-### Phase 4 — RAG 인프라 (다음 작업)
-- **F-16-1**: Chroma Vector DB 구축 (`utils/vector_store.py` 신규)
-  - 내부: `prompt_runs.jsonl` + Notion 아카이브
-  - 외부: Claude/GPT/Gemini 공식 프롬프트 엔지니어링 가이드, LLM Wiki
-- **F-16-3**: 체인별 분리 인덱스 (Chain 2: 행위축 필터 / Chain 3: 학문축 필터)
-- **F-16-4**: RAG on/off 성능 지표 (latency, few-shot 적중률)
-- **F-16-5**: 토큰 절감 시각화 (`st.metric`, F-13-5 tiktoken 연계)
+### 다음 작업 — F-10-6 Notion write-back 루프
+- F-15-2(push_fewshot_record) 완료로 선행 조건 충족
+- `sync_learning_data()` 호출 흐름 내에서 good/bad 사례 Notion 자동 누적
 
-### A. Few-shot/Notion 고도화
-- F-15-1 우수/불량 사례 자동 태깅 (80점↑ good / 40점↓ bad)
-- F-15-2 Notion few-shot DB write-back (NOTION_FEWSHOT_DB_ID 연동)
-- F-10-6 Notion good/bad 자동 write-back 루프
-
-### B. 루프 고도화 (잔여)
+### A. 보류 중인 기능
 - F-13-4 점수 추이 미니 차트 (`st.line_chart` 인라인)
 - F-25-5 소크라테스 질문 기반 맥락 보완 재진단 (F-20-3 연동)
+- F-16-4 RAG 정량적 성능 지표 (0.2 개발 완료 후)
 
-### C. Notion OAuth (사용자별 개인 DB 저장)
+### B. Notion OAuth (사용자별 개인 DB 저장)
 - 현재는 팀 공용 Notion DB에 저장 (`.env`의 `NOTION_DB_ID` 고정)
 - 사용자 각자의 Notion 계정으로 OAuth 인증 후 개인 DB에 저장
 - 다중 사용자 환경 대응
 
-### D. 프롬프트 품질 트래킹 대시보드
+### C. 프롬프트 품질 트래킹 대시보드
 - `data/prompt_runs.jsonl` 데이터 기반 시각화
 - 사용자별/날짜별 점수 추이, 레벨 변화 그래프
 - 행위축/학문축별 취약점 패턴 분석
