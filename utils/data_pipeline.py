@@ -312,11 +312,16 @@ def sync_learning_data(snapshot: dict[str, Any]) -> None:
     if not isinstance(snapshot, dict):
         return
     try:
+        from utils.notion import push_fewshot_record
         record = build_run_record(snapshot)
         append_run_record(record)
         # F-25-3: 행위축 기반 few-shot 필터링
         domain_action = str((snapshot.get("domain_result") or {}).get("domain_action") or "")
         refresh_fewshot_examples_from_runs(domain_action=domain_action)
+        # F-15-2: good/bad 사례 Notion few-shot DB write-back
+        data_consent = bool(snapshot.get("data_consent", True))
+        if data_consent and str(record.get("quality_tag") or "") in {"good", "bad"}:
+            push_fewshot_record(record)
     except Exception:
         # 학습 데이터 적재 실패는 사용자 진단 결과를 막지 않는다.
         return
