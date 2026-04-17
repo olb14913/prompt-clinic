@@ -23,6 +23,13 @@ from chains.model_router import (
     read_routing_config,
 )
 from chains.pipeline import build_chain_segments
+from chains.gate_chain import (
+    build_gate_chain,
+    build_question_chain,
+    compute_gate_total_score,
+    prep_gate_input,
+    prep_question_input,
+)
 from chains.self_improve_chain import apply_goal_weights, run_self_improve_loop
 from utils.data_pipeline import sync_learning_data
 
@@ -933,6 +940,47 @@ def _make_retry_phase_cb(
     return on_retry
 
 
+def _render_gate_ui() -> None:
+    """F-20-2 맥락 보완 배너 + F-20-3 소크라테스 질문 expander."""
+    gate_result = st.session_state.get("gate_result")
+    if not gate_result:
+        return
+    if float(gate_result.get("total_score", 0.0)) <= 0.5:
+        return
+
+    weak_axes: list[str] = list(gate_result.get("weak_axes") or [])
+    weak_str = "、".join(weak_axes) if weak_axes else "맥락 정보"
+
+    # F-20-2: 안내 배너
+    st.markdown(
+        f'<div style="background:rgba(255,193,7,0.08);border:1px solid rgba(255,193,7,0.55);'
+        f'border-radius:10px;padding:12px 16px;margin:4px 0 10px 0;">'
+        f'<span style="font-size:14px;font-weight:600;color:#0b0b0b;line-height:1.5;">'
+        f"💡 <strong>{html.escape(weak_str)}</strong> 항목을 보강하면 더 정확한 진단이 가능합니다. "
+        f"사용목적 또는 개선 포인트를 위에서 보완해 보세요.</span></div>",
+        unsafe_allow_html=True,
+    )
+
+    # F-20-3: 보완 질문 expander
+    questions: list[str] = list(
+        (st.session_state.get("gate_questions") or {}).get("questions") or []
+    )
+    with st.expander("💬 맥락 보완 질문 (선택사항)", expanded=True):
+        st.caption(
+            "아래 질문을 참고해 위 '사용목적'이나 '개선 포인트'를 수정하거나, "
+            "수정 없이 '진단 계속하기'를 눌러 바로 진단할 수 있습니다."
+        )
+        for q in questions:
+            st.markdown(
+                f'<p style="margin:0.3rem 0;font-size:14px;color:#0b0b0b;">'
+                f"• {html.escape(q)}</p>",
+                unsafe_allow_html=True,
+            )
+        if st.button("진단 계속하기", key="pc_gate_proceed", type="primary"):
+            st.session_state.gate_should_proceed = True
+            st.rerun()
+
+
 def init_session() -> None:
     if "history" not in st.session_state:
         st.session_state.history = []
@@ -956,6 +1004,14 @@ def init_session() -> None:
         st.session_state.data_consent = False
     if "domain_result" not in st.session_state:
         st.session_state.domain_result = None
+    if "gate_result" not in st.session_state:
+        st.session_state.gate_result = None
+    if "gate_questions" not in st.session_state:
+        st.session_state.gate_questions = None
+    if "gate_pending_diagnosis" not in st.session_state:
+        st.session_state.gate_pending_diagnosis = None
+    if "gate_should_proceed" not in st.session_state:
+        st.session_state.gate_should_proceed = False
 
 
 def _save_to_notion_with_retry(snapshot: dict[str, Any]) -> str:
@@ -983,6 +1039,9 @@ def _run_diagnosis(
     auto_trigger: bool,
 ) -> None:
     """LLM 체인 실행 및 결과를 session_state에 저장."""
+    st.session_state.gate_result = None
+    st.session_state.gate_questions = None
+    st.session_state.gate_pending_diagnosis = None
     st.session_state.notion_save_status = None
     # F-15-3: 진단 실행 자체를 학습 데이터 활용 동의로 간주
     st.session_state.data_consent = True
@@ -1606,6 +1665,36 @@ span[data-baseweb="tag"] {
                 False,
             )
 
+    # F-20: "진단 계속하기" 클릭 시 현재 위젯 값으로 진단 실행
+    if st.session_state.get("gate_should_proceed"):
+        st.session_state.gate_should_proceed = False
+        _gpending = st.session_state.get("gate_pending_diagnosis")
+        if _gpending:
+            _gp_purpose = str(st.session_state.get("purpose_input") or _gpending["purpose"])
+            _gp_text = str(st.session_state.get("user_prompt_input") or _gpending["text"])
+            _gp_goals = list(
+                st.session_state.get("improvement_goals_input") or _gpending["improvement_goals"]
+            )
+            st.session_state.gate_result = None
+            st.session_state.gate_questions = None
+            st.session_state.gate_pending_diagnosis = None
+            st.session_state["pc_pending_diagnosis"] = {
+                "prompt_name": _gpending["prompt_name"],
+                "purpose": _gp_purpose,
+                "output_format": _gpending["output_format"],
+                "improvement_goals": _gp_goals,
+                "text": _gp_text,
+                "auto_trigger": _gpending.get("auto_trigger", False),
+            }
+            _run_diagnosis(
+                str(_gpending["prompt_name"]),
+                _gp_purpose,
+                str(_gpending["output_format"]),
+                _gp_goals,
+                _gp_text,
+                bool(_gpending.get("auto_trigger", False)),
+            )
+
     if run or auto_trigger:
         text = (user_prompt or "").strip()
         prompt_name_text = (prompt_name or "").strip()
@@ -1650,22 +1739,87 @@ span[data-baseweb="tag"] {
             if auto_trigger:
                 st.session_state.auto_diagnose = False
         else:
-            st.session_state["pc_pending_diagnosis"] = {
-                "prompt_name": prompt_name_text,
-                "purpose": purpose_text,
-                "output_format": output_format,
-                "improvement_goals": list(improvement_goals),
-                "text": text,
-                "auto_trigger": auto_trigger,
-            }
-            _run_diagnosis(
-                prompt_name_text,
-                purpose_text,
-                output_format,
-                improvement_goals,
-                text,
-                auto_trigger,
+            # F-20-1: 맥락 모호성 게이트 분석
+            _routing = read_routing_config()
+            _gate_llm = make_openai_llm(_routing.openai_diagnosis_model, _routing.temperature)
+            _gate_phase = st.empty()
+            _gate_phase.markdown(
+                _pc_phase_banner("🔍 맥락 충분성 분석 중..."), unsafe_allow_html=True
             )
+            try:
+                _gate_chain = build_gate_chain(_gate_llm)
+                _gate_score: dict[str, Any] = invoke_with_retry(
+                    _gate_chain.invoke,
+                    prep_gate_input(purpose_text, text, improvement_goals),
+                    on_retry=_make_retry_phase_cb(_gate_phase, "맥락 분석"),
+                )
+            except Exception:
+                _gate_score = {
+                    "goal_ambiguity": 0.0,
+                    "constraint_ambiguity": 0.0,
+                    "success_ambiguity": 0.0,
+                    "weak_axes": [],
+                }
+            finally:
+                _gate_phase.empty()
+
+            _gate_total = compute_gate_total_score(_gate_score)
+            _gate_score["total_score"] = _gate_total
+
+            if _gate_total <= 0.5:
+                # 게이트 통과: 바로 진단 실행
+                st.session_state.gate_result = None
+                st.session_state["pc_pending_diagnosis"] = {
+                    "prompt_name": prompt_name_text,
+                    "purpose": purpose_text,
+                    "output_format": output_format,
+                    "improvement_goals": list(improvement_goals),
+                    "text": text,
+                    "auto_trigger": auto_trigger,
+                }
+                _run_diagnosis(
+                    prompt_name_text,
+                    purpose_text,
+                    output_format,
+                    improvement_goals,
+                    text,
+                    auto_trigger,
+                )
+            else:
+                # 게이트 경고: 질문 생성 후 배너+expander 표시
+                st.session_state.gate_result = _gate_score
+                _q_phase = st.empty()
+                _q_phase.markdown(
+                    _pc_phase_banner("💬 보완 질문 생성 중..."), unsafe_allow_html=True
+                )
+                try:
+                    _q_chain = build_question_chain(_gate_llm)
+                    _gate_questions: dict[str, Any] = invoke_with_retry(
+                        _q_chain.invoke,
+                        prep_question_input(
+                            purpose_text,
+                            text,
+                            list(_gate_score.get("weak_axes") or []),
+                        ),
+                        on_retry=_make_retry_phase_cb(_q_phase, "질문 생성"),
+                    )
+                except Exception:
+                    _gate_questions = {"questions": []}
+                finally:
+                    _q_phase.empty()
+
+                st.session_state.gate_questions = _gate_questions
+                st.session_state.gate_pending_diagnosis = {
+                    "prompt_name": prompt_name_text,
+                    "purpose": purpose_text,
+                    "output_format": output_format,
+                    "improvement_goals": list(improvement_goals),
+                    "text": text,
+                    "auto_trigger": auto_trigger,
+                }
+
+    # F-20-2/3: 게이트 배너 + 보완 질문 expander
+    _render_gate_ui()
 
     snap = st.session_state.last_snapshot
     if snap:
