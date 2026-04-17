@@ -308,6 +308,58 @@ def render_clipboard_copy_button(
         height=52,
     )
 
+def inject_live_counter(*, container_key: str, limit: int) -> None:
+    """textarea input 이벤트를 감지해 입력창 내부 우측에 실시간 글자 수 카운터 표시."""
+    components.html(
+        f"""
+        <script>
+        (function() {{
+          const doc = window.parent.document;
+
+          function mountCounter() {{
+            const wrapper = doc.querySelector('.st-key-{container_key}');
+            if (!wrapper) return false;
+
+            const textAreaShell = wrapper.querySelector('[data-testid="stTextArea"]');
+            if (!textAreaShell) return false;
+
+            const textarea = textAreaShell.querySelector('textarea');
+            if (!textarea) return false;
+
+            textAreaShell.classList.add('pc-live-counter-target');
+
+            let counter = textAreaShell.querySelector('.pc-live-counter');
+            if (!counter) {{
+              counter = doc.createElement('div');
+              counter.className = 'pc-live-counter';
+              textAreaShell.appendChild(counter);
+            }}
+
+            function renderCount() {{
+              counter.textContent = `${{textarea.value.length}} / {limit}`;
+            }}
+
+            if (!textarea.dataset.pcCounterBound) {{
+              textarea.addEventListener('input', renderCount);
+              textarea.dataset.pcCounterBound = '1';
+            }}
+
+            renderCount();
+            return true;
+          }}
+
+          let tries = 0;
+          const timer = setInterval(() => {{
+            const ok = mountCounter();
+            tries += 1;
+            if (ok || tries > 20) clearInterval(timer);
+          }}, 150);
+        }})();
+        </script>
+        """,
+        height=0,
+    )
+
 
 def _inject_pc_theme_css() -> None:
     """앱 본문 UI 토큰 스타일 (결과·히스토리·푸터 공통, 한 번 주입)."""
@@ -797,6 +849,30 @@ div[data-testid="stHorizontalBlock"]:has([data-testid="stDownloadButton"])
   z-index: 9999;
   box-shadow: 0 6px 12px rgba(0, 0, 0, 0.12);
 }}
+
+/* F-11-2 실시간 글자 수 카운터 */
+.pc-live-counter-target {{
+  position: relative;
+}}
+
+.pc-live-counter {{
+  position: absolute;
+  right: 12px;
+  bottom: 8px;
+  font-size: 11px;
+  line-height: 1;
+  color: #6c6c6c;
+  background: rgba(255, 255, 255, 0.92);
+  padding: 2px 6px;
+  border-radius: 999px;
+  z-index: 30;
+  pointer-events: none;
+}}
+
+.pc-live-counter-target textarea {{
+  padding-bottom: 28px !important;
+}}
+
 </style>
 """,
         unsafe_allow_html=True,
@@ -1424,6 +1500,7 @@ span[data-baseweb="tag"] {
             placeholder="예 : AI챗봇",
             key="prompt_name_input",
             label_visibility="collapsed",
+            max_chars=20,
         )
 
         st.markdown(
@@ -1445,11 +1522,11 @@ span[data-baseweb="tag"] {
                         key="purpose_input",
                         label_visibility="collapsed",
                         height=44,
+                        max_chars=100,
                     )
-                st.markdown(
-                    f'<div class="pc-char-right">{len((purpose or ""))} / 100</div>',
-                    unsafe_allow_html=True,
-                )
+                    
+                inject_live_counter(container_key="purpose_field", limit=100)
+               
                 if len((purpose or "")) > 100:
                     st.markdown(
                         '<p class="pc-inline-err">100자 이하로 입력해주세요.</p>',
@@ -1504,7 +1581,11 @@ span[data-baseweb="tag"] {
                 placeholder="예 : 앱을 위한 기획서 작성해줘",
                 key="user_prompt_input",
                 label_visibility="collapsed",
+                max_chars=500,
             )
+        
+        inject_live_counter(container_key="user_prompt_field", limit=500)
+            
             st.markdown(
                 f'<div class="pc-char-user-prompt">'
                 f"{len((user_prompt or ''))} / 500</div>",
