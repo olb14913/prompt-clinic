@@ -23,6 +23,18 @@ from chains.model_router import (
     read_routing_config,
 )
 from chains.pipeline import build_chain_segments
+from chains.drift_chain import (
+    build_drift_chain,
+    compute_drift_score,
+    prep_drift_input,
+)
+from chains.gate_chain import (
+    build_gate_chain,
+    build_question_chain,
+    compute_gate_total_score,
+    prep_gate_input,
+    prep_question_input,
+)
 from chains.self_improve_chain import apply_goal_weights, run_self_improve_loop
 from utils.data_pipeline import sync_learning_data
 
@@ -1009,6 +1021,47 @@ def _make_retry_phase_cb(
     return on_retry
 
 
+def _render_gate_ui() -> None:
+    """F-20-2 맥락 보완 배너 + F-20-3 소크라테스 질문 expander."""
+    gate_result = st.session_state.get("gate_result")
+    if not gate_result:
+        return
+    if float(gate_result.get("total_score", 0.0)) <= 0.5:
+        return
+
+    weak_axes: list[str] = list(gate_result.get("weak_axes") or [])
+    weak_str = "、".join(weak_axes) if weak_axes else "맥락 정보"
+
+    # F-20-2: 안내 배너
+    st.markdown(
+        f'<div style="background:rgba(255,193,7,0.08);border:1px solid rgba(255,193,7,0.55);'
+        f'border-radius:10px;padding:12px 16px;margin:4px 0 10px 0;">'
+        f'<span style="font-size:14px;font-weight:600;color:#0b0b0b;line-height:1.5;">'
+        f"💡 <strong>{html.escape(weak_str)}</strong> 항목을 보강하면 더 정확한 진단이 가능합니다. "
+        f"사용목적 또는 개선 포인트를 위에서 보완해 보세요.</span></div>",
+        unsafe_allow_html=True,
+    )
+
+    # F-20-3: 보완 질문 expander
+    questions: list[str] = list(
+        (st.session_state.get("gate_questions") or {}).get("questions") or []
+    )
+    with st.expander("💬 맥락 보완 질문 (선택사항)", expanded=True):
+        st.caption(
+            "아래 질문을 참고해 위 '사용목적'이나 '개선 포인트'를 수정하거나, "
+            "수정 없이 '진단 계속하기'를 눌러 바로 진단할 수 있습니다."
+        )
+        for q in questions:
+            st.markdown(
+                f'<p style="margin:0.3rem 0;font-size:14px;color:#0b0b0b;">'
+                f"• {html.escape(q)}</p>",
+                unsafe_allow_html=True,
+            )
+        if st.button("진단 계속하기", key="pc_gate_proceed", type="primary"):
+            st.session_state.gate_should_proceed = True
+            st.rerun()
+
+
 def init_session() -> None:
     if "history" not in st.session_state:
         st.session_state.history = []
@@ -1026,6 +1079,20 @@ def init_session() -> None:
         st.session_state.rediagnose_context = None
     if "rediagnose_prefill_pending" not in st.session_state:
         st.session_state.rediagnose_prefill_pending = False
+    if "original_prompt" not in st.session_state:
+        st.session_state.original_prompt = ""
+    if "data_consent" not in st.session_state:
+        st.session_state.data_consent = False
+    if "domain_result" not in st.session_state:
+        st.session_state.domain_result = None
+    if "gate_result" not in st.session_state:
+        st.session_state.gate_result = None
+    if "gate_questions" not in st.session_state:
+        st.session_state.gate_questions = None
+    if "gate_pending_diagnosis" not in st.session_state:
+        st.session_state.gate_pending_diagnosis = None
+    if "gate_should_proceed" not in st.session_state:
+        st.session_state.gate_should_proceed = False
 
 
 def _save_to_notion_with_retry(snapshot: dict[str, Any]) -> str:
@@ -1053,7 +1120,15 @@ def _run_diagnosis(
     auto_trigger: bool,
 ) -> None:
     """LLM 체인 실행 및 결과를 session_state에 저장."""
+    st.session_state.gate_result = None
+    st.session_state.gate_questions = None
+    st.session_state.gate_pending_diagnosis = None
     st.session_state.notion_save_status = None
+    # F-15-3: 진단 실행 자체를 학습 데이터 활용 동의로 간주
+    st.session_state.data_consent = True
+    # F-23-1: 최초 진단 시에만 원본 프롬프트 잠금 (재진단·재시도에서 덮어쓰기 방지)
+    if not st.session_state.get("original_prompt"):
+        st.session_state.original_prompt = text
     routing = read_routing_config()
     temperature = routing.temperature
     llm = make_openai_llm(routing.openai_diagnosis_model, temperature)
@@ -1078,6 +1153,13 @@ def _run_diagnosis(
             base_input,
             on_retry=_make_retry_phase_cb(phase_slot, "맥락 분석"),
         )
+        # F-25-1: 도메인 2축 분류 결과를 session_state에 저장 (UI 노출 없음)
+        st.session_state.domain_result = {
+            "domain_action": (context_profile or {}).get("domain_action", ""),
+            "domain_knowledge": (context_profile or {}).get("domain_knowledge", ""),
+            "confidence_action": float((context_profile or {}).get("confidence_action", 0.0)),
+            "confidence_knowledge": float((context_profile or {}).get("confidence_knowledge", 0.0)),
+        }
         merged = {**base_input, "context_profile": context_profile}
         _set_phase("📊 진단 중...")
         diagnosis = invoke_with_retry(
@@ -1086,6 +1168,7 @@ def _run_diagnosis(
             on_retry=_make_retry_phase_cb(phase_slot, "진단"),
         )
         weighted = apply_goal_weights(diagnosis, improvement_goals)
+        _loop_history: list[dict[str, Any]] = []
         if routing.self_improve_enabled:
             _set_phase("✍️ 개선안 생성 중...")
             rewrite_openai_llm = build_openai_rewrite_llm(routing)
@@ -1094,6 +1177,38 @@ def _run_diagnosis(
             rewrite_r_opus = None
             if rewrite_opus_llm is not None:
                 _, _, rewrite_r_opus = build_chain_segments(rewrite_opus_llm)
+
+            # F-20-4: 프로세스 상태 인디케이터 (수치 노출 없음)
+            _loop_iter_step = [0]
+            _LOOP_STEP_LABELS = ["맥락 분석 중", "목표 확인 완료", "제약사항 검토 중"]
+
+            def _on_loop_iteration(iter_no: int, max_iters: int, phase: str) -> None:
+                s = min(_loop_iter_step[0], 2)
+                parts = []
+                for i, step in enumerate(_LOOP_STEP_LABELS):
+                    if i < s:
+                        parts.append(
+                            f'<span style="color:#9ca3af;">{html.escape(step)}</span>'
+                        )
+                    elif i == s:
+                        parts.append(
+                            f'<span style="color:#285aff;font-weight:600;">{html.escape(step)}</span>'
+                        )
+                    else:
+                        parts.append(
+                            f'<span style="color:#d1d5db;">{html.escape(step)}</span>'
+                        )
+                sep = '<span style="color:#9ca3af;margin:0 4px;">›</span>'
+                indicator = sep.join(parts)
+                if phase_slot is not None:
+                    phase_slot.markdown(
+                        f'<div style="font-size:13px;line-height:1.6;padding:6px 12px;">'
+                        f'<span style="color:#6b7280;">🔄 반복 {iter_no}/{max_iters}&nbsp;|&nbsp;</span>'
+                        f"{indicator}</div>",
+                        unsafe_allow_html=True,
+                    )
+                _loop_iter_step[0] += 1
+
             loop_result = invoke_with_retry(
                 run_self_improve_loop,
                 base_input=base_input,
@@ -1104,8 +1219,10 @@ def _run_diagnosis(
                 routing=routing,
                 max_iters=routing.self_improve_max_iterations,
                 invoke_with_retry_fn=invoke_with_retry,
+                on_iteration=_on_loop_iteration,
                 on_retry=_make_retry_phase_cb(phase_slot, "자가개선"),
             )
+            _loop_history = list(loop_result.get("history") or [])
             best = loop_result.get("best") or {}
             rewrite = best.get("rewrite") or {}
             weighted = best.get("weighted") or weighted
@@ -1121,6 +1238,20 @@ def _run_diagnosis(
 
         improved = str(rewrite.get("improved_prompt", ""))
 
+        # F-23-2: 의도 드리프트 점수 산출 (UI 노출 없음, jsonl 내부 지표)
+        _drift_score = 0.0
+        _original_for_drift = str(st.session_state.get("original_prompt") or "")
+        if _original_for_drift and improved:
+            try:
+                _drift_chain = build_drift_chain(llm)
+                _drift_raw = invoke_with_retry(
+                    _drift_chain.invoke,
+                    prep_drift_input(_original_for_drift, improved),
+                )
+                _drift_score = compute_drift_score(_drift_raw)
+            except Exception:
+                pass
+
         st.session_state.last_snapshot = {
             "ts": datetime.now(),
             "prompt_name": prompt_name,
@@ -1128,10 +1259,14 @@ def _run_diagnosis(
             "output_format": output_format,
             "improvement_goals": list(improvement_goals),
             "user_prompt": text,
+            "original_prompt": st.session_state.original_prompt,
+            "domain_result": st.session_state.domain_result,
             "context_profile": context_profile,
             "diagnosis_raw": diagnosis,
             "weighted": weighted,
             "rewrite": rewrite,
+            "drift_score": _drift_score,
+            "loop_history": _loop_history,
         }
         sync_learning_data(st.session_state.last_snapshot)
         st.session_state.history.append(st.session_state.last_snapshot)
@@ -1294,6 +1429,44 @@ def _render_results_panel(snap: dict[str, Any]) -> bool:
             "동일 내용을 저장할 수 있어요."
         )
     return sync
+
+
+def _render_loop_history_cards() -> None:
+    """F-13-3: 자가개선 반복 이력 카드 (SELF_IMPROVE_ENABLED=true 시 표시)."""
+    snap = st.session_state.get("last_snapshot")
+    if not snap:
+        return
+    loop_history = list(snap.get("loop_history") or [])
+    if not loop_history:
+        return
+    with st.expander("🔄 개선 반복 이력", expanded=False):
+        for record in loop_history:
+            iter_no = int(record.get("iteration") or 0)
+            weighted_r = record.get("weighted") or {}
+            total_score = int(weighted_r.get("total_score") or 0)
+            grade = str(weighted_r.get("grade") or "")
+            changes = list((record.get("rewrite") or {}).get("changes") or [])
+            model_key = str(record.get("rewrite_model_key") or "openai")
+            grade_label, grade_bg, grade_fg = _figma_grade_badge(grade)
+            changes_html = "".join(
+                f'<p style="margin:4px 0 0 0;font-size:12px;color:#374151;">'
+                f"• {html.escape(str(ch))}</p>"
+                for ch in changes[:2]
+            )
+            st.markdown(
+                f'<div style="border:1px solid #DEDEDE;border-radius:8px;background:#F6F6F6;'
+                f'padding:10px 14px;margin:0 0 8px 0;">'
+                f'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">'
+                f'<span style="font-size:13px;font-weight:700;color:#0B0B0B;">Iter {iter_no}</span>'
+                f'<span style="font-size:13px;font-weight:700;color:#0B0B0B;">{total_score} / 100</span>'
+                f'<span style="background:{grade_bg};color:{grade_fg};border-radius:6px;'
+                f'padding:1px 8px;font-size:11px;font-weight:600;">{html.escape(grade_label)}</span>'
+                f'<span style="font-size:11px;color:#6B7280;">{html.escape(model_key)}</span>'
+                f"</div>"
+                f"{changes_html}"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
 
 
 def _render_history_panel() -> None:
@@ -1500,7 +1673,7 @@ span[data-baseweb="tag"] {
             placeholder="예 : AI챗봇",
             key="prompt_name_input",
             label_visibility="collapsed",
-            max_chars=20,
+            max_chars=20,       
         )
 
         st.markdown(
@@ -1624,6 +1797,26 @@ span[data-baseweb="tag"] {
         )
 
         _sp, run_col = st.columns([3.5, 1])
+        with _sp:
+            _privacy_url = os.environ.get(
+                "PRIVACY_POLICY_URL",
+                "https://www.notion.so/Prompt-Clinic-34340cb3731d80eeb2d8cad538a3fe67",
+            )
+            _service_url = os.environ.get(
+                "SERVICE_POLICY_URL",
+                "https://www.notion.so/Prompt-Clinic-34340cb3731d80edb1cbefcf197078d7",
+            )
+            st.markdown(
+                f'<p style="font-size:11px;color:#6c6c6c;line-height:1.6;margin:0.45rem 0 0 0;">'
+                f"진단 결과는 서비스 개선을 위한 학습 데이터로 활용될 수 있습니다.<br>"
+                f'<a href="{_service_url}" target="_blank" rel="noopener noreferrer" '
+                f'style="color:{UI_PRIMARY_BLUE};text-decoration:none;">서비스 이용정책 →</a>'
+                f'&nbsp;&nbsp;'
+                f'<a href="{_privacy_url}" target="_blank" rel="noopener noreferrer" '
+                f'style="color:{UI_PRIMARY_BLUE};text-decoration:none;">개인정보처리방침 →</a>'
+                f"</p>",
+                unsafe_allow_html=True,
+            )
         with run_col:
             run = st.button(
                 "진단 시작",
@@ -1645,6 +1838,36 @@ span[data-baseweb="tag"] {
                 list(pending["improvement_goals"]),
                 str(pending["text"]),
                 False,
+            )
+
+    # F-20: "진단 계속하기" 클릭 시 현재 위젯 값으로 진단 실행
+    if st.session_state.get("gate_should_proceed"):
+        st.session_state.gate_should_proceed = False
+        _gpending = st.session_state.get("gate_pending_diagnosis")
+        if _gpending:
+            _gp_purpose = str(st.session_state.get("purpose_input") or _gpending["purpose"])
+            _gp_text = str(st.session_state.get("user_prompt_input") or _gpending["text"])
+            _gp_goals = list(
+                st.session_state.get("improvement_goals_input") or _gpending["improvement_goals"]
+            )
+            st.session_state.gate_result = None
+            st.session_state.gate_questions = None
+            st.session_state.gate_pending_diagnosis = None
+            st.session_state["pc_pending_diagnosis"] = {
+                "prompt_name": _gpending["prompt_name"],
+                "purpose": _gp_purpose,
+                "output_format": _gpending["output_format"],
+                "improvement_goals": _gp_goals,
+                "text": _gp_text,
+                "auto_trigger": _gpending.get("auto_trigger", False),
+            }
+            _run_diagnosis(
+                str(_gpending["prompt_name"]),
+                _gp_purpose,
+                str(_gpending["output_format"]),
+                _gp_goals,
+                _gp_text,
+                bool(_gpending.get("auto_trigger", False)),
             )
 
     if run or auto_trigger:
@@ -1691,27 +1914,94 @@ span[data-baseweb="tag"] {
             if auto_trigger:
                 st.session_state.auto_diagnose = False
         else:
-            st.session_state["pc_pending_diagnosis"] = {
-                "prompt_name": prompt_name_text,
-                "purpose": purpose_text,
-                "output_format": output_format,
-                "improvement_goals": list(improvement_goals),
-                "text": text,
-                "auto_trigger": auto_trigger,
-            }
-            _run_diagnosis(
-                prompt_name_text,
-                purpose_text,
-                output_format,
-                improvement_goals,
-                text,
-                auto_trigger,
+            # F-20-1: 맥락 모호성 게이트 분석
+            _routing = read_routing_config()
+            _gate_llm = make_openai_llm(_routing.openai_diagnosis_model, _routing.temperature)
+            _gate_phase = st.empty()
+            _gate_phase.markdown(
+                _pc_phase_banner("🔍 맥락 충분성 분석 중..."), unsafe_allow_html=True
             )
+            try:
+                _gate_chain = build_gate_chain(_gate_llm)
+                _gate_score: dict[str, Any] = invoke_with_retry(
+                    _gate_chain.invoke,
+                    prep_gate_input(purpose_text, text, improvement_goals),
+                    on_retry=_make_retry_phase_cb(_gate_phase, "맥락 분석"),
+                )
+            except Exception:
+                _gate_score = {
+                    "goal_ambiguity": 0.0,
+                    "constraint_ambiguity": 0.0,
+                    "success_ambiguity": 0.0,
+                    "weak_axes": [],
+                }
+            finally:
+                _gate_phase.empty()
+
+            _gate_total = compute_gate_total_score(_gate_score)
+            _gate_score["total_score"] = _gate_total
+
+            if _gate_total <= 0.5:
+                # 게이트 통과: 바로 진단 실행
+                st.session_state.gate_result = None
+                st.session_state["pc_pending_diagnosis"] = {
+                    "prompt_name": prompt_name_text,
+                    "purpose": purpose_text,
+                    "output_format": output_format,
+                    "improvement_goals": list(improvement_goals),
+                    "text": text,
+                    "auto_trigger": auto_trigger,
+                }
+                _run_diagnosis(
+                    prompt_name_text,
+                    purpose_text,
+                    output_format,
+                    improvement_goals,
+                    text,
+                    auto_trigger,
+                )
+            else:
+                # 게이트 경고: 질문 생성 후 배너+expander 표시
+                st.session_state.gate_result = _gate_score
+                _q_phase = st.empty()
+                _q_phase.markdown(
+                    _pc_phase_banner("💬 보완 질문 생성 중..."), unsafe_allow_html=True
+                )
+                try:
+                    _q_chain = build_question_chain(_gate_llm)
+                    _gate_questions: dict[str, Any] = invoke_with_retry(
+                        _q_chain.invoke,
+                        prep_question_input(
+                            purpose_text,
+                            text,
+                            list(_gate_score.get("weak_axes") or []),
+                        ),
+                        on_retry=_make_retry_phase_cb(_q_phase, "질문 생성"),
+                    )
+                except Exception:
+                    _gate_questions = {"questions": []}
+                finally:
+                    _q_phase.empty()
+
+                st.session_state.gate_questions = _gate_questions
+                st.session_state.gate_pending_diagnosis = {
+                    "prompt_name": prompt_name_text,
+                    "purpose": purpose_text,
+                    "output_format": output_format,
+                    "improvement_goals": list(improvement_goals),
+                    "text": text,
+                    "auto_trigger": auto_trigger,
+                }
+
+    # F-20-2/3: 게이트 배너 + 보완 질문 expander
+    _render_gate_ui()
 
     snap = st.session_state.last_snapshot
     if snap:
         st.markdown(_pc_phase_banner("✅ 진단 완료!"), unsafe_allow_html=True)
         sync_prompt_from_widget = _render_results_panel(snap)
+        if os.environ.get("SELF_IMPROVE_ENABLED", "false").lower() == "true":
+            _render_loop_history_cards()
 
     _render_history_panel()
 
