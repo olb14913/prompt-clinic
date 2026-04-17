@@ -1590,7 +1590,7 @@ span[data-baseweb="tag"] {
                 f'<div class="pc-char-user-prompt">'
                 f"{len((user_prompt or ''))} / 500</div>",
                 unsafe_allow_html=True,
-            )
+        )
 
         p_len = len((purpose or ""))
         t_len = len((user_prompt or ""))
