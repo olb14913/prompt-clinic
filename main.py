@@ -23,6 +23,11 @@ from chains.model_router import (
     read_routing_config,
 )
 from chains.pipeline import build_chain_segments
+from chains.drift_chain import (
+    build_drift_chain,
+    compute_drift_score,
+    prep_drift_input,
+)
 from chains.gate_chain import (
     build_gate_chain,
     build_question_chain,
@@ -1087,6 +1092,7 @@ def _run_diagnosis(
             on_retry=_make_retry_phase_cb(phase_slot, "진단"),
         )
         weighted = apply_goal_weights(diagnosis, improvement_goals)
+        _loop_history: list[dict[str, Any]] = []
         if routing.self_improve_enabled:
             _set_phase("✍️ 개선안 생성 중...")
             rewrite_openai_llm = build_openai_rewrite_llm(routing)
@@ -1095,6 +1101,38 @@ def _run_diagnosis(
             rewrite_r_opus = None
             if rewrite_opus_llm is not None:
                 _, _, rewrite_r_opus = build_chain_segments(rewrite_opus_llm)
+
+            # F-20-4: 프로세스 상태 인디케이터 (수치 노출 없음)
+            _loop_iter_step = [0]
+            _LOOP_STEP_LABELS = ["맥락 분석 중", "목표 확인 완료", "제약사항 검토 중"]
+
+            def _on_loop_iteration(iter_no: int, max_iters: int, phase: str) -> None:
+                s = min(_loop_iter_step[0], 2)
+                parts = []
+                for i, step in enumerate(_LOOP_STEP_LABELS):
+                    if i < s:
+                        parts.append(
+                            f'<span style="color:#9ca3af;">{html.escape(step)}</span>'
+                        )
+                    elif i == s:
+                        parts.append(
+                            f'<span style="color:#285aff;font-weight:600;">{html.escape(step)}</span>'
+                        )
+                    else:
+                        parts.append(
+                            f'<span style="color:#d1d5db;">{html.escape(step)}</span>'
+                        )
+                sep = '<span style="color:#9ca3af;margin:0 4px;">›</span>'
+                indicator = sep.join(parts)
+                if phase_slot is not None:
+                    phase_slot.markdown(
+                        f'<div style="font-size:13px;line-height:1.6;padding:6px 12px;">'
+                        f'<span style="color:#6b7280;">🔄 반복 {iter_no}/{max_iters}&nbsp;|&nbsp;</span>'
+                        f"{indicator}</div>",
+                        unsafe_allow_html=True,
+                    )
+                _loop_iter_step[0] += 1
+
             loop_result = invoke_with_retry(
                 run_self_improve_loop,
                 base_input=base_input,
@@ -1105,8 +1143,10 @@ def _run_diagnosis(
                 routing=routing,
                 max_iters=routing.self_improve_max_iterations,
                 invoke_with_retry_fn=invoke_with_retry,
+                on_iteration=_on_loop_iteration,
                 on_retry=_make_retry_phase_cb(phase_slot, "자가개선"),
             )
+            _loop_history = list(loop_result.get("history") or [])
             best = loop_result.get("best") or {}
             rewrite = best.get("rewrite") or {}
             weighted = best.get("weighted") or weighted
@@ -1122,6 +1162,20 @@ def _run_diagnosis(
 
         improved = str(rewrite.get("improved_prompt", ""))
 
+        # F-23-2: 의도 드리프트 점수 산출 (UI 노출 없음, jsonl 내부 지표)
+        _drift_score = 0.0
+        _original_for_drift = str(st.session_state.get("original_prompt") or "")
+        if _original_for_drift and improved:
+            try:
+                _drift_chain = build_drift_chain(llm)
+                _drift_raw = invoke_with_retry(
+                    _drift_chain.invoke,
+                    prep_drift_input(_original_for_drift, improved),
+                )
+                _drift_score = compute_drift_score(_drift_raw)
+            except Exception:
+                pass
+
         st.session_state.last_snapshot = {
             "ts": datetime.now(),
             "prompt_name": prompt_name,
@@ -1135,6 +1189,8 @@ def _run_diagnosis(
             "diagnosis_raw": diagnosis,
             "weighted": weighted,
             "rewrite": rewrite,
+            "drift_score": _drift_score,
+            "loop_history": _loop_history,
         }
         sync_learning_data(st.session_state.last_snapshot)
         st.session_state.history.append(st.session_state.last_snapshot)
@@ -1297,6 +1353,44 @@ def _render_results_panel(snap: dict[str, Any]) -> bool:
             "동일 내용을 저장할 수 있어요."
         )
     return sync
+
+
+def _render_loop_history_cards() -> None:
+    """F-13-3: 자가개선 반복 이력 카드 (SELF_IMPROVE_ENABLED=true 시 표시)."""
+    snap = st.session_state.get("last_snapshot")
+    if not snap:
+        return
+    loop_history = list(snap.get("loop_history") or [])
+    if not loop_history:
+        return
+    with st.expander("🔄 개선 반복 이력", expanded=False):
+        for record in loop_history:
+            iter_no = int(record.get("iteration") or 0)
+            weighted_r = record.get("weighted") or {}
+            total_score = int(weighted_r.get("total_score") or 0)
+            grade = str(weighted_r.get("grade") or "")
+            changes = list((record.get("rewrite") or {}).get("changes") or [])
+            model_key = str(record.get("rewrite_model_key") or "openai")
+            grade_label, grade_bg, grade_fg = _figma_grade_badge(grade)
+            changes_html = "".join(
+                f'<p style="margin:4px 0 0 0;font-size:12px;color:#374151;">'
+                f"• {html.escape(str(ch))}</p>"
+                for ch in changes[:2]
+            )
+            st.markdown(
+                f'<div style="border:1px solid #DEDEDE;border-radius:8px;background:#F6F6F6;'
+                f'padding:10px 14px;margin:0 0 8px 0;">'
+                f'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">'
+                f'<span style="font-size:13px;font-weight:700;color:#0B0B0B;">Iter {iter_no}</span>'
+                f'<span style="font-size:13px;font-weight:700;color:#0B0B0B;">{total_score} / 100</span>'
+                f'<span style="background:{grade_bg};color:{grade_fg};border-radius:6px;'
+                f'padding:1px 8px;font-size:11px;font-weight:600;">{html.escape(grade_label)}</span>'
+                f'<span style="font-size:11px;color:#6B7280;">{html.escape(model_key)}</span>'
+                f"</div>"
+                f"{changes_html}"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
 
 
 def _render_history_panel() -> None:
@@ -1825,6 +1919,8 @@ span[data-baseweb="tag"] {
     if snap:
         st.markdown(_pc_phase_banner("✅ 진단 완료!"), unsafe_allow_html=True)
         sync_prompt_from_widget = _render_results_panel(snap)
+        if os.environ.get("SELF_IMPROVE_ENABLED", "false").lower() == "true":
+            _render_loop_history_cards()
 
     _render_history_panel()
 

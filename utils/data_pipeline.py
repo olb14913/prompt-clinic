@@ -101,6 +101,7 @@ def build_run_record(snapshot: dict[str, Any]) -> dict[str, Any]:
         "analysis_summary": _analysis_summary(weighted),
         "domain_action": str(domain_result.get("domain_action") or ""),
         "domain_knowledge": str(domain_result.get("domain_knowledge") or ""),
+        "drift_score": float(snapshot.get("drift_score") or 0.0),
     }
 
 
