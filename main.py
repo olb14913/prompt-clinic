@@ -1586,7 +1586,7 @@ span[data-baseweb="tag"] {
         
         inject_live_counter(container_key="user_prompt_field", limit=500)
             
-            st.markdown(
+        st.markdown(
                 f'<div class="pc-char-user-prompt">'
                 f"{len((user_prompt or ''))} / 500</div>",
                 unsafe_allow_html=True,
