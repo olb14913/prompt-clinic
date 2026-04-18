@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+from utils.vector_store import search_diagnosis
+
 from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
@@ -112,7 +114,7 @@ DIAGNOSIS_HUMAN = """## 맥락 프로필 (JSON)
 
 ## 행위축 채점 가중치 힌트
 {domain_weights_hint}
-
+{rag_context}
 ## 진단 대상 프롬프트
 ```
 {user_prompt}
@@ -180,14 +182,36 @@ def build_diagnosis_chain(llm: ChatOpenAI):
     return prompt | llm | parser
 
 
+def _format_rag_diag(results: list[dict[str, Any]]) -> str:
+    """RAG 검색 결과를 진단 프롬프트 블록으로 포맷팅. 결과 없으면 ""."""
+    if not results:
+        return ""
+    lines = ["## RAG 참고 사례"]
+    for i, item in enumerate(results, 1):
+        meta = item.get("metadata") or {}
+        domain = str(meta.get("domain_action") or "")
+        source = str(meta.get("source") or "")
+        tag = " / ".join(part for part in [
+            f"domain_action: {domain}" if domain else "",
+            f"source: {source}" if source else "",
+        ] if part)
+        text = str(item.get("text") or "").strip()
+        header = f"{i}. ({tag})" if tag else f"{i}."
+        lines.append(f"{header}\n{text}")
+    return "\n".join(lines) + "\n"
+
+
 def prep_diagnosis_input(inputs: dict[str, Any]) -> dict[str, Any]:
     profile = inputs.get("context_profile") or {}
     goals = inputs.get("improvement_goals") or []
     domain_action = str(profile.get("domain_action") or "")
+    user_prompt = str(inputs.get("user_prompt") or "")
+    rag_results = search_diagnosis(user_prompt, domain_action, k=3)
     return {
         "context_profile_json": json.dumps(profile, ensure_ascii=False, indent=2),
         "output_format": inputs.get("output_format") or "",
         "improvement_goals_text": ", ".join(goals) if goals else "(선택 없음)",
         "domain_weights_hint": _build_domain_weights_hint(domain_action),
-        "user_prompt": inputs.get("user_prompt") or "",
+        "user_prompt": user_prompt,
+        "rag_context": _format_rag_diag(rag_results),
     }

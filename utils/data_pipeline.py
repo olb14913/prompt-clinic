@@ -27,6 +27,16 @@ def _safe_int(value: Any) -> int:
         return 0
 
 
+def _count_tokens(text: str) -> int:
+    """F-13-5: tiktoken으로 토큰 수 카운팅. 미설치/오류 시 0 반환."""
+    try:
+        import tiktoken
+        enc = tiktoken.encoding_for_model("gpt-4o")
+        return len(enc.encode(text))
+    except Exception:
+        return 0
+
+
 def _ensure_data_dir() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -45,6 +55,15 @@ def _score_to_hint(score: int) -> str:
     if score >= 50:
         return "중간"
     return "낮음"
+
+
+def _score_to_quality_tag(score: int) -> str:
+    """F-15-1: 80점↑ → good, 40점↓ → bad, 그 외 → neutral."""
+    if score >= 80:
+        return "good"
+    if score <= 40:
+        return "bad"
+    return "neutral"
 
 
 def infer_prompt_level(total_score: int) -> dict[str, Any]:
@@ -102,6 +121,13 @@ def build_run_record(snapshot: dict[str, Any]) -> dict[str, Any]:
         "domain_action": str(domain_result.get("domain_action") or ""),
         "domain_knowledge": str(domain_result.get("domain_knowledge") or ""),
         "drift_score": float(snapshot.get("drift_score") or 0.0),
+        "before_token_count": _count_tokens(str(snapshot.get("user_prompt") or "")),
+        "after_token_count": _count_tokens(
+            str((snapshot.get("rewrite") or {}).get("improved_prompt") or "")
+        ),
+        "loop_history": list(snapshot.get("loop_history") or []),
+        "best_iteration_no": snapshot.get("best_iteration_no"),
+        "quality_tag": _score_to_quality_tag(total_score),
     }
 
 
@@ -282,15 +308,40 @@ def refresh_fewshot_examples_from_runs(
     return True
 
 
+def _refresh_fewshot_from_notion() -> bool:
+    """F-10-6: Notion fewshot DB → 로컬 fewshot_examples.json 갱신.
+
+    NOTION_FEWSHOT_ENABLED=false 시 skip (load_fewshot_examples_from_notion 내부 guard).
+    결과 없으면 기존 파일 유지. 실패 시 False 반환.
+    """
+    from utils.notion import load_fewshot_examples_from_notion
+    examples = load_fewshot_examples_from_notion()
+    if not examples:
+        return False
+    _ensure_data_dir()
+    FEWSHOT_PATH.write_text(
+        json.dumps(examples, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return True
+
+
 def sync_learning_data(snapshot: dict[str, Any]) -> None:
     if not isinstance(snapshot, dict):
         return
     try:
+        from utils.notion import push_fewshot_record
         record = build_run_record(snapshot)
         append_run_record(record)
         # F-25-3: 행위축 기반 few-shot 필터링
         domain_action = str((snapshot.get("domain_result") or {}).get("domain_action") or "")
         refresh_fewshot_examples_from_runs(domain_action=domain_action)
+        # F-15-2: good/bad 사례 Notion few-shot DB write-back
+        data_consent = bool(snapshot.get("data_consent", True))
+        if data_consent and str(record.get("quality_tag") or "") in {"good", "bad"}:
+            push_fewshot_record(record)
+        # F-10-6: Notion pull-back → 로컬 fewshot_examples.json 갱신
+        _refresh_fewshot_from_notion()
     except Exception:
         # 학습 데이터 적재 실패는 사용자 진단 결과를 막지 않는다.
         return

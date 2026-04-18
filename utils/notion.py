@@ -644,6 +644,147 @@ def load_fewshot_examples_from_notion(limit: int = 8) -> list[dict[str, Any]]:
     return examples
 
 
+def _build_fewshot_properties(
+    record: dict[str, Any],
+    db_props: dict[str, Any],
+) -> dict[str, Any]:
+    """F-15-2: build_run_record() 결과를 Notion few-shot DB 프로퍼티로 변환."""
+    prompt_name = str(record.get("prompt_name") or "")
+    user_prompt = str(record.get("user_prompt") or "")
+    improved = str(record.get("improved_prompt") or "")
+    total_score = int(record.get("total_score") or 0)
+    grade = str(record.get("grade") or "")
+    analysis = str(record.get("analysis_summary") or "")
+    quality_tag = str(record.get("quality_tag") or "")
+    domain_action = str(record.get("domain_action") or "")
+    domain_knowledge = str(record.get("domain_knowledge") or "")
+    title_text = (prompt_name or user_prompt)[:40]
+
+    payload: dict[str, Any] = {}
+
+    title_match = _find_property_name(
+        db_props,
+        candidates=["프롬프트 명", "Name", "제목"],
+        allowed_types={"title"},
+        allow_any_fallback=True,
+    )
+    if title_match is None:
+        return {"title": {"title": _rich_text(title_text)}}
+    title_name, title_type = title_match
+    _set_text_prop(payload, title_name, title_type, title_text)
+
+    tag_match = _find_property_name(
+        db_props,
+        candidates=["quality_tag", "태그", "tag"],
+        allowed_types={"select"},
+    )
+    if tag_match and quality_tag:
+        payload[tag_match[0]] = {"select": {"name": quality_tag}}
+
+    score_match = _find_property_name(
+        db_props,
+        candidates=["종합점수", "총점", "total_score"],
+        allowed_types={"number"},
+    )
+    if score_match:
+        payload[score_match[0]] = {"number": total_score}
+
+    grade_match = _find_property_name(
+        db_props,
+        candidates=["등급", "grade"],
+        allowed_types={"select"},
+    )
+    if grade_match and grade:
+        grade_name = grade_match[0]
+        grade_meta = db_props.get(grade_name)
+        option_names = (
+            _extract_option_names(grade_meta, "select")
+            if isinstance(grade_meta, dict)
+            else set()
+        )
+        if not option_names or grade in option_names:
+            payload[grade_name] = {"select": {"name": grade}}
+
+    before_match = _find_property_name(
+        db_props,
+        candidates=["Before", "원본", "원본 프롬프트"],
+        allowed_types={"rich_text"},
+    )
+    if before_match and user_prompt:
+        payload[before_match[0]] = {"rich_text": _rich_text(user_prompt)}
+
+    after_match = _find_property_name(
+        db_props,
+        candidates=["After", "개선 프롬프트"],
+        allowed_types={"rich_text"},
+    )
+    if after_match and improved:
+        payload[after_match[0]] = {"rich_text": _rich_text(improved)}
+
+    analysis_match = _find_property_name(
+        db_props,
+        candidates=["분석요약", "analysis", "진단요약"],
+        allowed_types={"rich_text"},
+    )
+    if analysis_match and analysis:
+        payload[analysis_match[0]] = {"rich_text": _rich_text(analysis)}
+
+    action_match = _find_property_name(
+        db_props,
+        candidates=["행위축", "domain_action"],
+        allowed_types={"rich_text", "select"},
+    )
+    if action_match and domain_action:
+        prop_type = action_match[1]
+        if prop_type == "select":
+            payload[action_match[0]] = {"select": {"name": domain_action}}
+        else:
+            payload[action_match[0]] = {"rich_text": _rich_text(domain_action)}
+
+    knowledge_match = _find_property_name(
+        db_props,
+        candidates=["학문축", "domain_knowledge"],
+        allowed_types={"rich_text", "select"},
+    )
+    if knowledge_match and domain_knowledge:
+        prop_type = knowledge_match[1]
+        if prop_type == "select":
+            payload[knowledge_match[0]] = {"select": {"name": domain_knowledge}}
+        else:
+            payload[knowledge_match[0]] = {"rich_text": _rich_text(domain_knowledge)}
+
+    return payload
+
+
+def push_fewshot_record(record: dict[str, Any]) -> bool:
+    """F-15-2: quality_tag good/bad 레코드를 Notion few-shot DB에 push.
+
+    NOTION_FEWSHOT_DB_ID 미설정 시 False 반환 (에러 아님).
+    API 실패도 False 반환 — 호출측 진단 결과에 영향 없음.
+    """
+    api_key = os.environ.get("NOTION_API_KEY", "")
+    db_id = os.environ.get("NOTION_FEWSHOT_DB_ID", "")
+    if not api_key or not db_id:
+        return False
+    try:
+        db_props = _fetch_database_properties(db_id)
+        props = _build_fewshot_properties(record, db_props)
+        payload = {
+            "parent": {"database_id": db_id},
+            "properties": props,
+        }
+        resp = requests.post(
+            f"{NOTION_BASE_URL}/pages",
+            headers=_headers(),
+            json=payload,
+            timeout=10,
+        )
+        resp.raise_for_status()
+        return True
+    except Exception:
+        return False
+
+
 def save_diagnosis_page(snapshot: dict[str, Any]) -> str:
     """진단 결과를 Notion 데이터베이스 페이지로 저장합니다.
 

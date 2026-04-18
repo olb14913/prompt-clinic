@@ -1,4 +1,4 @@
-"""점수 기반 LLM 라우팅 유틸."""
+"""LLM 라우팅 유틸."""
 
 from __future__ import annotations
 
@@ -32,7 +32,6 @@ class RoutingConfig:
     openai_diagnosis_model: str
     openai_rewrite_model: str
     opus_model: str
-    opus_threshold: int
     self_improve_enabled: bool
     self_improve_max_iterations: int
 
@@ -49,7 +48,6 @@ def read_routing_config() -> RoutingConfig:
             "OPENAI_REWRITE_MODEL", base_openai_model
         ),
         opus_model=os.environ.get("ANTHROPIC_MODEL_OPUS", "claude-3-opus-20240229"),
-        opus_threshold=max(0, min(100, _env_int("OPUS_SCORE_THRESHOLD", 70))),
         self_improve_enabled=_env_bool("SELF_IMPROVE_ENABLED", False),
         self_improve_max_iterations=max(1, _env_int("SELF_IMPROVE_MAX_ITERS", 3)),
     )
@@ -63,17 +61,6 @@ def build_openai_rewrite_llm(config: RoutingConfig) -> ChatOpenAI:
     return make_openai_llm(config.openai_rewrite_model, config.temperature)
 
 
-def resolve_rewrite_model_key(
-    score: int,
-    *,
-    has_opus: bool,
-    threshold: int,
-) -> str:
-    if has_opus and score >= threshold:
-        return "opus"
-    return "openai"
-
-
 def build_opus_llm(config: RoutingConfig) -> Any | None:
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key:
@@ -82,11 +69,15 @@ def build_opus_llm(config: RoutingConfig) -> Any | None:
         from langchain_anthropic import ChatAnthropic
     except Exception:
         return None
-    return ChatAnthropic(
-        model=config.opus_model,
-        temperature=config.temperature,
-        anthropic_api_key=api_key,
+    # Claude 4+ 모델은 temperature 파라미터 미지원
+    is_claude4 = (
+        "claude-opus-4" in config.opus_model
+        or "claude-sonnet-4" in config.opus_model
     )
+    kwargs: dict[str, Any] = {"model": config.opus_model, "anthropic_api_key": api_key}
+    if not is_claude4:
+        kwargs["temperature"] = config.temperature
+    return ChatAnthropic(**kwargs)
 
 
 def model_key_to_label(model_key: str, config: RoutingConfig) -> str:

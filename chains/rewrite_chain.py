@@ -3,6 +3,8 @@
 import json
 from typing import Any
 
+from utils.vector_store import search_rewrite
+
 from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
@@ -34,7 +36,7 @@ REWRITE_HUMAN = """## 맥락 프로필
 
 ## 진단 결과 (JSON)
 {diagnosis_json}
-
+{rag_context}
 ## 개선 목적 (반드시 반영)
 {improvement_goals_text}
 
@@ -42,7 +44,7 @@ REWRITE_HUMAN = """## 맥락 프로필
 ```
 {user_prompt}
 ```
-
+{persona_instruction}
 진단과 맥락·개선 목적을 모두 반영해 프롬프트를 재작성하고, 변경 이유를 changes에 정리하세요.
 {format_instructions}"""
 
@@ -59,13 +61,39 @@ def build_rewrite_chain(llm: ChatOpenAI):
     return prompt | llm | parser
 
 
+def _format_rag_rewrite(results: list[dict[str, Any]]) -> str:
+    """RAG 검색 결과를 재작성 프롬프트 블록으로 포맷팅. 결과 없으면 ""."""
+    if not results:
+        return ""
+    lines = ["## RAG 참고 가이드"]
+    for i, item in enumerate(results, 1):
+        meta = item.get("metadata") or {}
+        domain = str(meta.get("domain_knowledge") or "")
+        source = str(meta.get("source") or "")
+        tag = " / ".join(part for part in [
+            f"domain_knowledge: {domain}" if domain else "",
+            f"source: {source}" if source else "",
+        ] if part)
+        text = str(item.get("text") or "").strip()
+        header = f"{i}. ({tag})" if tag else f"{i}."
+        lines.append(f"{header}\n{text}")
+    return "\n".join(lines) + "\n"
+
+
 def prep_rewrite_input(inputs: dict[str, Any]) -> dict[str, Any]:
     profile = inputs.get("context_profile") or {}
     diagnosis = inputs.get("diagnosis") or {}
     goals = inputs.get("improvement_goals") or []
+    persona_instruction = str(inputs.get("persona_instruction") or "").strip()
+    hint_block = f"\n## 재작성 전략 힌트\n{persona_instruction}\n" if persona_instruction else ""
+    user_prompt = str(inputs.get("user_prompt") or "")
+    domain_knowledge = str(profile.get("domain_knowledge") or "")
+    rag_results = search_rewrite(user_prompt, domain_knowledge, k=3)
     return {
         "context_profile_json": json.dumps(profile, ensure_ascii=False, indent=2),
         "diagnosis_json": json.dumps(diagnosis, ensure_ascii=False, indent=2),
         "improvement_goals_text": ", ".join(goals) if goals else "(선택 없음)",
-        "user_prompt": inputs.get("user_prompt") or "",
+        "user_prompt": user_prompt,
+        "persona_instruction": hint_block,
+        "rag_context": _format_rag_rewrite(rag_results),
     }
