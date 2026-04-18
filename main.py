@@ -1075,6 +1075,8 @@ def init_session() -> None:
         st.session_state.lc_chat_history = InMemoryChatMessageHistory()
     if "notion_save_status" not in st.session_state:
         st.session_state.notion_save_status = None  # None | "success" | "error"
+    if "notion_save_error" not in st.session_state:
+        st.session_state.notion_save_error = None    
     if "rediagnose_context" not in st.session_state:
         st.session_state.rediagnose_context = None
     if "rediagnose_prefill_pending" not in st.session_state:
@@ -1268,6 +1270,21 @@ def _run_diagnosis(
             "drift_score": _drift_score,
             "loop_history": _loop_history,
         }
+        
+        notion_ready = bool(
+            os.environ.get("NOTION_API_KEY") and os.environ.get("NOTION_DB_ID")
+        )
+        st.session_state.notion_save_status = None
+        st.session_state.notion_save_error = None
+
+        if notion_ready:
+            try:
+                _save_to_notion_with_retry(st.session_state.last_snapshot)
+                st.session_state.notion_save_status = "success"
+            except Exception as e:
+                st.session_state.notion_save_status = "error"
+                st.session_state.notion_save_error = f"{type(e).__name__}: {e}"
+       
         sync_learning_data(st.session_state.last_snapshot)
         st.session_state.history.append(st.session_state.last_snapshot)
         st.session_state.lc_chat_history.add_user_message(text[:300])
@@ -1380,54 +1397,17 @@ def _render_results_panel(snap: dict[str, Any]) -> bool:
         improved,
         changes,
     )
-
-    notion_ready = bool(
-        os.environ.get("NOTION_API_KEY") and os.environ.get("NOTION_DB_ID")
+    
+    st.download_button(
+        "⬇️ 리포트 다운로드 (.md)",
+        data=md_body,
+        file_name=fn,
+        mime="text/markdown",
+        type="primary",
+        use_container_width=True,
+        key="download_report_md",
     )
-    dl_col, notion_col = st.columns(2)
-    with dl_col:
-        st.download_button(
-            "⬇️ 리포트 다운로드 (.md)",
-            data=md_body,
-            file_name=fn,
-            mime="text/markdown",
-            type="primary",
-            use_container_width=True,
-            key="download_report_md",
-        )
-    with notion_col:
-        if notion_ready:
-            if st.button(
-                "🗂️ 프롬프트 아카이빙 (Notion)",
-                type="primary",
-                key="notion_save",
-                use_container_width=True,
-            ):
-                try:
-                    _save_to_notion_with_retry(snap)
-                    st.session_state.notion_save_status = "success"
-                    st.toast("✅ Notion에 자동 저장됐어요!")
-                except Exception:
-                    st.session_state.notion_save_status = "error"
-                    st.toast("😢 Notion 저장에 실패했어요. 리포트를 다운로드해 보관하세요.")
-        else:
-            st.button(
-                "🗂️ 프롬프트 아카이빙 (Notion)",
-                type="primary",
-                disabled=True,
-                use_container_width=True,
-                key="notion_save_disabled",
-                help=(
-                    "NOTION_API_KEY와 NOTION_DB_ID를 .env에 설정하면 "
-                    "사용할 수 있어요."
-                ),
-            )
 
-    if st.session_state.get("notion_save_status") == "error":
-        st.caption(
-            "Notion 저장에 실패했을 때는 위 **리포트 다운로드**로 "
-            "동일 내용을 저장할 수 있어요."
-        )
     return sync
 
 
