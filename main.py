@@ -474,23 +474,36 @@ section[data-testid="stSidebar"] {{
 }}
 
 .pc-section-required-text {{
-  font-size: 13px;
+  font-size: 11px;
   font-weight: 500;
   color: #9a9a9a;
-  line-height: 1.3;
+  line-height: 1.2;
 }}
 
 .pc-label-row-single {{
   margin-bottom: 0.35rem;
 }}
 
-.pc-char-inline {{
-  font-size: 12px;
-  line-height: 1.3;
-  color: #6c6c6c;
-  font-weight: 500;
+.pc-input-counter-target {{
+  position: relative;
 }}
 
+.pc-input-counter {{
+  position: absolute;
+  right: 14px;
+  bottom: 10px;
+  font-size: 12px;
+  line-height: 1;
+  color: #6c6c6c;
+  background: rgba(255, 255, 255, 0.92);
+  padding: 0 2px;
+  z-index: 30;
+  pointer-events: none;
+}}
+
+.pc-input-counter-target input {{
+  padding-right: 56px !important;
+}}
 .st-key-prompt_name_field {{
   margin-bottom: 0.8rem;
 }}
@@ -1695,8 +1708,7 @@ span[data-baseweb="tag"] {
             st.markdown(
                 """
                 <div class="pc-label-row pc-label-row-single">
-                    <span class="pc-wire-label-strong">프롬프트 명 (20자 이하)</span>
-                    <span class="pc-char-inline">0 / 20</span>
+                    <span class="pc-wire-muted pc-context-field-label">프롬프트 명 (20자 이하)</span>
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -1709,46 +1721,55 @@ span[data-baseweb="tag"] {
                 max_chars=20,
             )
 
-        st.markdown(
-            """
-            <script>
-            (function() {
-              const doc = window.parent.document;
+    st.markdown(
+        """
+        <script>
+        (function() {
+          const doc = window.parent.document;
 
-              function mountPromptNameCounter() {
-                const wrapper = doc.querySelector('.st-key-prompt_name_field');
-                if (!wrapper) return false;
+          function mountPromptNameCounter() {
+            const wrapper = doc.querySelector('.st-key-prompt_name_field');
+            if (!wrapper) return false;
 
-                const input = wrapper.querySelector('input');
-                if (!input) return false;
+            const inputShell = wrapper.querySelector('[data-testid="stTextInput"]');
+            if (!inputShell) return false;
 
-                const counter = wrapper.querySelector('.pc-char-inline');
-                if (!counter) return false;
+            const input = inputShell.querySelector('input');
+            if (!input) return false;
 
-                function renderCount() {
-                  counter.textContent = `${input.value.length} / 20`;
-                }
+            inputShell.classList.add('pc-input-counter-target');
 
-                if (!input.dataset.pcPromptCounterBound) {
-                  input.addEventListener('input', renderCount);
-                  input.dataset.pcPromptCounterBound = '1';
-                }
+            let counter = inputShell.querySelector('.pc-input-counter');
+            if (!counter) {
+              counter = doc.createElement('div');
+              counter.className = 'pc-input-counter';
+              inputShell.appendChild(counter);
+            }
 
-                renderCount();
-                return true;
-              }
+            function renderCount() {
+              counter.textContent = `${input.value.length} / 20`;
+            }
 
-              let tries = 0;
-              const timer = setInterval(() => {
-                const ok = mountPromptNameCounter();
-                tries += 1;
-                if (ok || tries > 20) clearInterval(timer);
-              }, 150);
-            })();
-            </script>
-            """,
-            unsafe_allow_html=True,
-        )
+            if (!input.dataset.pcPromptCounterBound) {
+              input.addEventListener('input', renderCount);
+              input.dataset.pcPromptCounterBound = '1';
+            }
+
+            renderCount();
+            return true;
+          }
+
+          let tries = 0;
+          const timer = setInterval(() => {
+            const ok = mountPromptNameCounter();
+            tries += 1;
+            if (ok || tries > 20) clearInterval(timer);
+          }, 150);
+        })();
+        </script>
+        """,
+        unsafe_allow_html=True,
+    )
         
         with st.container(key="pc_context_row"):
             col_purpose, col_fmt = st.columns([1.85, 1], vertical_alignment="top")
