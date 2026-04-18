@@ -69,11 +69,15 @@ def build_opus_llm(config: RoutingConfig) -> Any | None:
         from langchain_anthropic import ChatAnthropic
     except Exception:
         return None
-    return ChatAnthropic(
-        model=config.opus_model,
-        temperature=config.temperature,
-        anthropic_api_key=api_key,
+    # Claude 4+ 모델은 temperature 파라미터 미지원
+    is_claude4 = (
+        "claude-opus-4" in config.opus_model
+        or "claude-sonnet-4" in config.opus_model
     )
+    kwargs: dict[str, Any] = {"model": config.opus_model, "anthropic_api_key": api_key}
+    if not is_claude4:
+        kwargs["temperature"] = config.temperature
+    return ChatAnthropic(**kwargs)
 
 
 def model_key_to_label(model_key: str, config: RoutingConfig) -> str:
