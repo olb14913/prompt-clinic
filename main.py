@@ -456,6 +456,45 @@ section[data-testid="stSidebar"] {{
   font-size: 0.875rem;
   color: {UI_DOVE_GRAY};
 }}
+
+/* 맥락 수집 헤더 + 필수 안내 문구 */
+.pc-section-head-inline {{
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 0.45rem 0;
+  flex-wrap: wrap;
+}}
+
+.pc-section-head-inline .pc-wire-section {{
+  margin: 0;
+  font-size: 16px;
+  font-weight: 800;
+  color: #0b0b0b;
+}}
+
+.pc-section-required-text {{
+  font-size: 13px;
+  font-weight: 500;
+  color: #9a9a9a;
+  line-height: 1.3;
+}}
+
+.pc-label-row-single {{
+  margin-bottom: 0.35rem;
+}}
+
+.pc-char-inline {{
+  font-size: 12px;
+  line-height: 1.3;
+  color: #6c6c6c;
+  font-weight: 500;
+}}
+
+.st-key-prompt_name_field {{
+  margin-bottom: 0.8rem;
+}}
+
 .pc-char-right {{
   text-align: right;
   font-size: 11px;
@@ -1075,6 +1114,8 @@ def init_session() -> None:
         st.session_state.lc_chat_history = InMemoryChatMessageHistory()
     if "notion_save_status" not in st.session_state:
         st.session_state.notion_save_status = None  # None | "success" | "error"
+    if "notion_save_error" not in st.session_state:
+        st.session_state.notion_save_error = None    
     if "rediagnose_context" not in st.session_state:
         st.session_state.rediagnose_context = None
     if "rediagnose_prefill_pending" not in st.session_state:
@@ -1268,6 +1309,21 @@ def _run_diagnosis(
             "drift_score": _drift_score,
             "loop_history": _loop_history,
         }
+        
+        notion_ready = bool(
+            os.environ.get("NOTION_API_KEY") and os.environ.get("NOTION_DB_ID")
+        )
+        st.session_state.notion_save_status = None
+        st.session_state.notion_save_error = None
+
+        if notion_ready:
+            try:
+                _save_to_notion_with_retry(st.session_state.last_snapshot)
+                st.session_state.notion_save_status = "success"
+            except Exception as e:
+                st.session_state.notion_save_status = "error"
+                st.session_state.notion_save_error = f"{type(e).__name__}: {e}"
+       
         sync_learning_data(st.session_state.last_snapshot)
         st.session_state.history.append(st.session_state.last_snapshot)
         st.session_state.lc_chat_history.add_user_message(text[:300])
@@ -1380,54 +1436,17 @@ def _render_results_panel(snap: dict[str, Any]) -> bool:
         improved,
         changes,
     )
-
-    notion_ready = bool(
-        os.environ.get("NOTION_API_KEY") and os.environ.get("NOTION_DB_ID")
+    
+    st.download_button(
+        "⬇️ 리포트 다운로드 (.md)",
+        data=md_body,
+        file_name=fn,
+        mime="text/markdown",
+        type="primary",
+        use_container_width=True,
+        key="download_report_md",
     )
-    dl_col, notion_col = st.columns(2)
-    with dl_col:
-        st.download_button(
-            "⬇️ 리포트 다운로드 (.md)",
-            data=md_body,
-            file_name=fn,
-            mime="text/markdown",
-            type="primary",
-            use_container_width=True,
-            key="download_report_md",
-        )
-    with notion_col:
-        if notion_ready:
-            if st.button(
-                "🗂️ 프롬프트 아카이빙 (Notion)",
-                type="primary",
-                key="notion_save",
-                use_container_width=True,
-            ):
-                try:
-                    _save_to_notion_with_retry(snap)
-                    st.session_state.notion_save_status = "success"
-                    st.toast("✅ Notion에 자동 저장됐어요!")
-                except Exception:
-                    st.session_state.notion_save_status = "error"
-                    st.toast("😢 Notion 저장에 실패했어요. 리포트를 다운로드해 보관하세요.")
-        else:
-            st.button(
-                "🗂️ 프롬프트 아카이빙 (Notion)",
-                type="primary",
-                disabled=True,
-                use_container_width=True,
-                key="notion_save_disabled",
-                help=(
-                    "NOTION_API_KEY와 NOTION_DB_ID를 .env에 설정하면 "
-                    "사용할 수 있어요."
-                ),
-            )
 
-    if st.session_state.get("notion_save_status") == "error":
-        st.caption(
-            "Notion 저장에 실패했을 때는 위 **리포트 다운로드**로 "
-            "동일 내용을 저장할 수 있어요."
-        )
     return sync
 
 
@@ -1663,23 +1682,74 @@ span[data-baseweb="tag"] {
 
     with st.container(border=True, key="pc_input_shell"):
         st.markdown(
-            '<span class="pc-wire-label-strong">프롬프트명</span>'
-            '<span class="pc-wire-muted"> (20자 이하, 추후 프롬프트 다운로드 및 '
-            "저장 시, 파일명으로 사용됩니다.)</span>",
+            """
+            <div class="pc-section-head-inline">
+                <span class="pc-wire-section">맥락 수집</span>
+                <span class="pc-section-required-text">모든 항목은 필수입력값입니다.</span>
+            </div>
+            """,
             unsafe_allow_html=True,
-        )
-        prompt_name = st.text_input(
-            "프롬프트명",
-            placeholder="예 : AI챗봇",
-            key="prompt_name_input",
-            label_visibility="collapsed",
-            max_chars=20,       
         )
 
+        with st.container(key="prompt_name_field"):
+            st.markdown(
+                """
+                <div class="pc-label-row pc-label-row-single">
+                    <span class="pc-wire-label-strong">프롬프트 명 (20자 이하)</span>
+                    <span class="pc-char-inline">0 / 20</span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            prompt_name = st.text_input(
+                "프롬프트명",
+                placeholder="예 : AI 챗봇",
+                key="prompt_name_input",
+                label_visibility="collapsed",
+                max_chars=20,
+            )
+
         st.markdown(
-            '<p class="pc-wire-section">맥락 수집</p>',
+            """
+            <script>
+            (function() {
+              const doc = window.parent.document;
+
+              function mountPromptNameCounter() {
+                const wrapper = doc.querySelector('.st-key-prompt_name_field');
+                if (!wrapper) return false;
+
+                const input = wrapper.querySelector('input');
+                if (!input) return false;
+
+                const counter = wrapper.querySelector('.pc-char-inline');
+                if (!counter) return false;
+
+                function renderCount() {
+                  counter.textContent = `${input.value.length} / 20`;
+                }
+
+                if (!input.dataset.pcPromptCounterBound) {
+                  input.addEventListener('input', renderCount);
+                  input.dataset.pcPromptCounterBound = '1';
+                }
+
+                renderCount();
+                return true;
+              }
+
+              let tries = 0;
+              const timer = setInterval(() => {
+                const ok = mountPromptNameCounter();
+                tries += 1;
+                if (ok || tries > 20) clearInterval(timer);
+              }, 150);
+            })();
+            </script>
+            """,
             unsafe_allow_html=True,
         )
+        
         with st.container(key="pc_context_row"):
             col_purpose, col_fmt = st.columns([1.85, 1], vertical_alignment="top")
             with col_purpose:
@@ -1691,7 +1761,7 @@ span[data-baseweb="tag"] {
                 with st.container(key="purpose_field"):
                     purpose = st.text_area(
                         "프롬프트 사용목적",
-                        placeholder="예 : 앱을 위한 기획서 작성",
+                        placeholder="예 : AI 챗봇 생성을 위한 프롬프트 작성",
                         key="purpose_input",
                         label_visibility="collapsed",
                         height=44,
