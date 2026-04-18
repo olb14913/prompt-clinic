@@ -1770,8 +1770,7 @@ span[data-baseweb="tag"] {
         """,
         unsafe_allow_html=True,
     )
-        
-        with st.container(key="pc_context_row"):
+    with st.container(key="pc_context_row"):
             col_purpose, col_fmt = st.columns([1.85, 1], vertical_alignment="top")
             with col_purpose:
                 st.markdown(
@@ -1788,9 +1787,9 @@ span[data-baseweb="tag"] {
                         height=44,
                         max_chars=100,
                     )
-                    
+
                 inject_live_counter(container_key="purpose_field", limit=100)
-               
+
                 if len((purpose or "")) > 100:
                     st.markdown(
                         '<p class="pc-inline-err">100자 이하로 입력해주세요.</p>',
@@ -1847,13 +1846,13 @@ span[data-baseweb="tag"] {
                 label_visibility="collapsed",
                 max_chars=500,
             )
-        
+
         inject_live_counter(container_key="user_prompt_field", limit=500)
-            
+
         st.markdown(
-                f'<div class="pc-char-user-prompt">'
-                f"{len((user_prompt or ''))} / 500</div>",
-                unsafe_allow_html=True,
+            f'<div class="pc-char-user-prompt">'
+            f"{len((user_prompt or ''))} / 500</div>",
+            unsafe_allow_html=True,
         )
 
         p_len = len((purpose or ""))
