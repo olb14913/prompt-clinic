@@ -1721,57 +1721,59 @@ span[data-baseweb="tag"] {
                 max_chars=20,
             )
 
-    st.markdown(
-        """
-        <script>
-        (function() {
-          const doc = window.parent.document;
+        st.markdown(
+            """
+            <script>
+            (function() {
+            const doc = window.parent.document;
 
-          function mountPromptNameCounter() {
-            const wrapper = doc.querySelector('.st-key-prompt_name_field');
-            if (!wrapper) return false;
+            function mountPromptNameCounter() {
+                const wrapper = doc.querySelector('.st-key-prompt_name_field');
+                if (!wrapper) return false;
 
-            const inputShell = wrapper.querySelector('[data-testid="stTextInput"]');
-            if (!inputShell) return false;
+                const inputShell = wrapper.querySelector('[data-testid="stTextInput"]');
+                if (!inputShell) return false;
 
-            const input = inputShell.querySelector('input');
-            if (!input) return false;
+                const input = inputShell.querySelector('input');
+                if (!input) return false;
 
-            inputShell.classList.add('pc-input-counter-target');
+                inputShell.classList.add('pc-input-counter-target');
 
-            let counter = inputShell.querySelector('.pc-input-counter');
-            if (!counter) {
-              counter = doc.createElement('div');
-              counter.className = 'pc-input-counter';
-              inputShell.appendChild(counter);
+                let counter = inputShell.querySelector('.pc-input-counter');
+                if (!counter) {
+                counter = doc.createElement('div');
+                counter.className = 'pc-input-counter';
+                inputShell.appendChild(counter);
+                }
+
+                function renderCount() {
+                counter.textContent = `${input.value.length} / 20`;
+                }
+
+                if (!input.dataset.pcPromptCounterBound) {
+                input.addEventListener('input', renderCount);
+                input.dataset.pcPromptCounterBound = '1';
+                }
+
+                renderCount();
+                return true;
             }
 
-            function renderCount() {
-              counter.textContent = `${input.value.length} / 20`;
-            }
+            let tries = 0;
+            const timer = setInterval(() => {
+                const ok = mountPromptNameCounter();
+                tries += 1;
+                if (ok || tries > 20) clearInterval(timer);
+            }, 150);
+            })();
+            </script>
+            """,
+            unsafe_allow_html=True,
+        )
 
-            if (!input.dataset.pcPromptCounterBound) {
-              input.addEventListener('input', renderCount);
-              input.dataset.pcPromptCounterBound = '1';
-            }
-
-            renderCount();
-            return true;
-          }
-
-          let tries = 0;
-          const timer = setInterval(() => {
-            const ok = mountPromptNameCounter();
-            tries += 1;
-            if (ok || tries > 20) clearInterval(timer);
-          }, 150);
-        })();
-        </script>
-        """,
-        unsafe_allow_html=True,
-    )
-    with st.container(key="pc_context_row"):
+        with st.container(key="pc_context_row"):
             col_purpose, col_fmt = st.columns([1.85, 1], vertical_alignment="top")
+
             with col_purpose:
                 st.markdown(
                     '<span class="pc-wire-muted pc-context-field-label">'
@@ -1795,6 +1797,7 @@ span[data-baseweb="tag"] {
                         '<p class="pc-inline-err">100자 이하로 입력해주세요.</p>',
                         unsafe_allow_html=True,
                     )
+
             with col_fmt:
                 st.markdown(
                     '<span class="pc-wire-label-strong pc-context-field-label">'
@@ -1825,6 +1828,7 @@ span[data-baseweb="tag"] {
 
         _up_prev = str(st.session_state.get("user_prompt_input") or "")
         _prompt_len_err_label = len(_up_prev) > 500
+
         with st.container(key="user_prompt_field"):
             st.markdown(
                 '<div class="pc-label-row">'
@@ -1858,6 +1862,7 @@ span[data-baseweb="tag"] {
         p_len = len((purpose or ""))
         t_len = len((user_prompt or ""))
         pn = (prompt_name or "").strip()
+
         purpose_ok = bool((purpose or "").strip()) and p_len <= 100
         name_ok = (
             bool(pn)
@@ -1873,20 +1878,21 @@ span[data-baseweb="tag"] {
         err_prompt_border = t_len > 500
         st.markdown(
             f"""
-<style>
-.st-key-purpose_field div[data-baseweb="input"] input,
-.st-key-purpose_field div[data-baseweb="textarea"] textarea {{
-  border-color: {'#d40924' if err_purpose_border else '#DEDEDE'} !important;
-}}
-.st-key-user_prompt_field div[data-baseweb="textarea"] textarea {{
-  border-color: {'#d40924' if err_prompt_border else '#DEDEDE'} !important;
-}}
-</style>
-""",
+    <style>
+    .st-key-purpose_field div[data-baseweb="input"] input,
+    .st-key-purpose_field div[data-baseweb="textarea"] textarea {{
+    border-color: {'#d40924' if err_purpose_border else '#DEDEDE'} !important;
+    }}
+    .st-key-user_prompt_field div[data-baseweb="textarea"] textarea {{
+    border-color: {'#d40924' if err_prompt_border else '#DEDEDE'} !important;
+    }}
+    </style>
+    """,
             unsafe_allow_html=True,
         )
 
         _sp, run_col = st.columns([3.5, 1])
+        
         with _sp:
             _privacy_url = os.environ.get(
                 "PRIVACY_POLICY_URL",
