@@ -5,9 +5,13 @@ from __future__ import annotations
 import hashlib
 from typing import Any, Callable
 
-from chains.model_router import RoutingConfig, model_key_to_label, resolve_rewrite_model_key
+from chains.model_router import RoutingConfig, model_key_to_label
 
 CRITERION_KEYS = ["clarity", "constraint", "output_format", "context"]
+
+# ── Phase 루프 상수 ──────────────────────────────────────────────────────────
+_PHASE1_MAX_ITERS = 3    # Phase 1 OpenAI 최대 반복 횟수
+_PHASE2_EXTRA_ITERS = 2  # Phase 2 검증 후 추가 루프 (총 Opus = 1 + 2 = 3)
 
 # ── F-22-1: 정체 패턴 상수 ──────────────────────────────────────────────────
 STAGNATION_SPINNING = "SPINNING"           # 동일 출력 반복
@@ -147,33 +151,6 @@ def get_persona_instruction(persona: str) -> str:
     return _PERSONA_INSTRUCTIONS.get(persona, "")
 
 
-def _count_tokens_approx(texts: list[str]) -> int:
-    """F-13-4: 텍스트 리스트의 토큰 수 추정. tiktoken 없으면 len//4 fallback."""
-    combined = " ".join(texts)
-    try:
-        import tiktoken
-        enc = tiktoken.encoding_for_model("gpt-4o")
-        return len(enc.encode(combined))
-    except Exception:
-        return len(combined) // 4
-
-
-def _opus_budget_exceeded(
-    calls_used: int,
-    tokens_used: int,
-    estimated_tokens: int,
-    routing: RoutingConfig,
-) -> bool:
-    """F-13-4: Opus 예산 초과 여부. 0은 무제한."""
-    if routing.opus_max_calls > 0 and calls_used >= routing.opus_max_calls:
-        return True
-    if routing.opus_max_tokens > 0 and (
-        tokens_used + estimated_tokens
-    ) > routing.opus_max_tokens:
-        return True
-    return False
-
-
 def _select_best_iteration(history: list[dict[str, Any]]) -> dict[str, Any]:
     """F-13-1: 이력에서 최적 이터레이션을 선택한다.
 
@@ -192,6 +169,204 @@ def _select_best_iteration(history: list[dict[str, Any]]) -> dict[str, Any]:
     )
 
 
+def _run_phase1_openai_loop(
+    *,
+    base_input: dict[str, Any],
+    context_profile: dict[str, Any],
+    diagnosis_r: Any,
+    rewrite_r_openai: Any,
+    routing: RoutingConfig,
+    invoke_with_retry_fn: Callable[..., Any],
+    on_iteration: Callable[[int, int, str], None] | None,
+) -> tuple[list[dict[str, Any]], int]:
+    """Phase 1: OpenAI 전용 루프. 반환: (history, phase1_best_score)"""
+    current_prompt = str(base_input.get("user_prompt") or "")
+    history: list[dict[str, Any]] = []
+    prev_score = -1
+    phase1_best_score = 0
+    label_openai = model_key_to_label("openai", routing)
+
+    for idx in range(_PHASE1_MAX_ITERS):
+        iter_no = idx + 1
+        merged = {
+            **base_input,
+            "user_prompt": current_prompt,
+            "context_profile": context_profile,
+        }
+        if on_iteration is not None:
+            on_iteration(iter_no, _PHASE1_MAX_ITERS, "진단")
+        diagnosis = invoke_with_retry_fn(diagnosis_r.invoke, merged)
+        weighted = apply_goal_weights(
+            diagnosis, list(base_input.get("improvement_goals") or [])
+        )
+        score = int(weighted.get("total_score") or 0)
+
+        if on_iteration is not None:
+            on_iteration(iter_no, _PHASE1_MAX_ITERS, f"개선안 생성 ({label_openai})")
+        rewrite = invoke_with_retry_fn(
+            rewrite_r_openai.invoke,
+            {**merged, "diagnosis": diagnosis},
+        )
+        improved = str(rewrite.get("improved_prompt") or "").strip()
+        history.append({
+            "iteration": iter_no,
+            "input_prompt": current_prompt,
+            "improved_prompt": improved,
+            "diagnosis_raw": diagnosis,
+            "weighted": weighted,
+            "rewrite": rewrite,
+            "rewrite_model_key": "openai",
+            "strategy": "phase1",
+            "persona": "",
+        })
+        phase1_best_score = max(phase1_best_score, score)
+
+        if score == 100:
+            break
+        stagnant = score <= prev_score or not improved or improved == current_prompt
+        if stagnant:
+            break
+        prev_score = score
+        current_prompt = improved
+
+    return history, phase1_best_score
+
+
+def _run_phase2_opus_loop(
+    *,
+    history: list[dict[str, Any]],
+    phase1_best_score: int,
+    base_input: dict[str, Any],
+    context_profile: dict[str, Any],
+    diagnosis_r: Any,
+    rewrite_r_opus: Any,
+    routing: RoutingConfig,
+    invoke_with_retry_fn: Callable[..., Any],
+    on_iteration: Callable[[int, int, str], None] | None,
+) -> list[dict[str, Any]]:
+    """Phase 2: Opus 교차 검증 1회 + 조건부 추가 루프. 반환: 업데이트된 history."""
+    result = list(history)
+    label_opus = model_key_to_label("opus", routing)
+    total_p2 = _PHASE1_MAX_ITERS + 1 + _PHASE2_EXTRA_ITERS
+
+    # Phase 1 best 결과에서 입력 프롬프트·진단 추출
+    best_p1 = _select_best_iteration(result)
+    p1_prompt = str(best_p1.get("improved_prompt") or "").strip()
+    if not p1_prompt:
+        p1_prompt = str(base_input.get("user_prompt") or "")
+    p1_diag = best_p1.get("diagnosis_raw") or {}
+
+    # ── 2a: Opus 교차 검증 (1 call) ─────────────────────────────────────────
+    iter_val = len(result) + 1
+    merged_p1 = {
+        **base_input,
+        "user_prompt": p1_prompt,
+        "context_profile": context_profile,
+    }
+    if on_iteration is not None:
+        on_iteration(iter_val, total_p2, f"Opus 교차 검증 ({label_opus})")
+    try:
+        rewrite_val = invoke_with_retry_fn(
+            rewrite_r_opus.invoke,
+            {**merged_p1, "diagnosis": p1_diag},
+        )
+        improved_val = str(rewrite_val.get("improved_prompt") or "").strip()
+    except Exception:
+        return result
+
+    if not improved_val:
+        return result
+
+    merged_val = {
+        **base_input,
+        "user_prompt": improved_val,
+        "context_profile": context_profile,
+    }
+    diagnosis_val = invoke_with_retry_fn(diagnosis_r.invoke, merged_val)
+    weighted_val = apply_goal_weights(
+        diagnosis_val, list(base_input.get("improvement_goals") or [])
+    )
+    opus_score = int(weighted_val.get("total_score") or 0)
+
+    result.append({
+        "iteration": iter_val,
+        "input_prompt": p1_prompt,
+        "improved_prompt": improved_val,
+        "diagnosis_raw": diagnosis_val,
+        "weighted": weighted_val,
+        "rewrite": rewrite_val,
+        "rewrite_model_key": "opus",
+        "strategy": "phase2_validation",
+        "persona": "",
+    })
+
+    # ── 2b: 추가 루프 (최대 _PHASE2_EXTRA_ITERS = 2회) ──────────────────────
+    persona_mode = opus_score >= phase1_best_score
+    current_p2 = improved_val
+
+    for extra_idx in range(_PHASE2_EXTRA_ITERS):
+        iter_extra = len(result) + 1
+        merged_extra = {
+            **base_input,
+            "user_prompt": current_p2,
+            "context_profile": context_profile,
+        }
+
+        # 페르소나 결정
+        persona_name = ""
+        persona_hint = ""
+        strategy = "phase2_persona" if persona_mode else "phase2_fix"
+
+        if persona_mode and extra_idx == 0:
+            persona_name = PERSONA_CONTRARIAN
+            persona_hint = get_persona_instruction(PERSONA_CONTRARIAN)
+        else:
+            pattern = detect_stagnation_pattern(result)
+            if pattern is not None:
+                persona_name = select_persona_for_pattern(pattern)
+                persona_hint = get_persona_instruction(persona_name)
+                strategy = pattern
+
+        if on_iteration is not None:
+            if persona_name:
+                label = f"전략 전환 ({persona_name})"
+            else:
+                label = f"개선안 생성 ({label_opus})"
+            on_iteration(iter_extra, total_p2, label)
+
+        diag_extra = invoke_with_retry_fn(diagnosis_r.invoke, merged_extra)
+        w_extra = apply_goal_weights(
+            diag_extra, list(base_input.get("improvement_goals") or [])
+        )
+        rw_extra = invoke_with_retry_fn(
+            rewrite_r_opus.invoke,
+            {
+                **merged_extra,
+                "diagnosis": diag_extra,
+                "persona_instruction": persona_hint,
+            },
+        )
+        imp_extra = str(rw_extra.get("improved_prompt") or "").strip()
+
+        result.append({
+            "iteration": iter_extra,
+            "input_prompt": current_p2,
+            "improved_prompt": imp_extra,
+            "diagnosis_raw": diag_extra,
+            "weighted": w_extra,
+            "rewrite": rw_extra,
+            "rewrite_model_key": "opus",
+            "strategy": strategy,
+            "persona": persona_name,
+        })
+
+        if not imp_extra or imp_extra == current_p2:
+            break
+        current_p2 = imp_extra
+
+    return result
+
+
 def run_self_improve_loop(
     *,
     base_input: dict[str, Any],
@@ -204,128 +379,32 @@ def run_self_improve_loop(
     invoke_with_retry_fn: Callable[..., Any],
     on_iteration: Callable[[int, int, str], None] | None = None,
 ) -> dict[str, Any]:
-    """개선→재진단 반복 후 최고점 결과를 반환한다."""
-    current_prompt = str(base_input.get("user_prompt") or "")
-    history: list[dict[str, Any]] = []
-    prev_score = -1
-    opus_calls_used = 0
-    opus_tokens_used = 0
+    """Phase 1 (OpenAI 최대 3회) → Phase 2 (Opus 최대 3회) 후 최고점 결과 반환."""
+    history, phase1_best_score = _run_phase1_openai_loop(
+        base_input=base_input,
+        context_profile=context_profile,
+        diagnosis_r=diagnosis_r,
+        rewrite_r_openai=rewrite_r_openai,
+        routing=routing,
+        invoke_with_retry_fn=invoke_with_retry_fn,
+        on_iteration=on_iteration,
+    )
 
-    for idx in range(max_iters):
-        iter_no = idx + 1
-        merged_for_diag = {
-            **base_input,
-            "user_prompt": current_prompt,
-            "context_profile": context_profile,
-        }
-        if on_iteration is not None:
-            on_iteration(iter_no, max_iters, "진단")
-        diagnosis = invoke_with_retry_fn(diagnosis_r.invoke, merged_for_diag)
-        weighted = apply_goal_weights(diagnosis, list(base_input.get("improvement_goals") or []))
-        score = int(weighted.get("total_score") or 0)
-        model_key = resolve_rewrite_model_key(
-            score,
-            has_opus=rewrite_r_opus is not None,
-            threshold=routing.opus_threshold,
+    if rewrite_r_opus is not None:
+        history = _run_phase2_opus_loop(
+            history=history,
+            phase1_best_score=phase1_best_score,
+            base_input=base_input,
+            context_profile=context_profile,
+            diagnosis_r=diagnosis_r,
+            rewrite_r_opus=rewrite_r_opus,
+            routing=routing,
+            invoke_with_retry_fn=invoke_with_retry_fn,
+            on_iteration=on_iteration,
         )
-        # F-13-4: Opus 예산 초과 시 OpenAI fallback
-        if model_key == "opus":
-            estimated = _count_tokens_approx([current_prompt])
-            if _opus_budget_exceeded(
-                opus_calls_used, opus_tokens_used, estimated, routing
-            ):
-                model_key = "openai"
-        rewrite_r = rewrite_r_opus if model_key == "opus" else rewrite_r_openai
-        if rewrite_r is None:
-            rewrite_r = rewrite_r_openai
-        if on_iteration is not None:
-            model_label = model_key_to_label(model_key, routing)
-            on_iteration(iter_no, max_iters, f"개선안 생성 ({model_label})")
-        rewrite = invoke_with_retry_fn(
-            rewrite_r.invoke,
-            {**merged_for_diag, "diagnosis": diagnosis},
-        )
-        # F-13-4: Opus 사용량 업데이트
-        if model_key == "opus":
-            opus_calls_used += 1
-            opus_tokens_used += _count_tokens_approx([current_prompt, str(rewrite)])
-        improved = str(rewrite.get("improved_prompt") or "").strip()
-        record = {
-            "iteration": iter_no,
-            "input_prompt": current_prompt,
-            "improved_prompt": improved,
-            "diagnosis_raw": diagnosis,
-            "weighted": weighted,
-            "rewrite": rewrite,
-            "rewrite_model_key": model_key,
-            "strategy": "default",
-            "persona": "",
-        }
-        history.append(record)
 
-        # 점수 향상이 없거나 개선 결과가 비어 있으면 조기 종료
-        stagnant = score <= prev_score or not improved or improved == current_prompt
-        if stagnant:
-            # F-13-2: 정체 감지 → 페르소나 전략으로 1회 재시도
-            pattern = detect_stagnation_pattern(history)
-            if pattern is not None:
-                persona = select_persona_for_pattern(pattern)
-                persona_hint = get_persona_instruction(persona)
-                if on_iteration is not None:
-                    on_iteration(iter_no, max_iters, f"전략 전환 ({persona})")
-                # F-13-4: 페르소나 재시도 Opus 예산 체크
-                retry_model_key = model_key
-                retry_rewrite_r = rewrite_r
-                if retry_model_key == "opus":
-                    estimated_retry = _count_tokens_approx([current_prompt])
-                    if _opus_budget_exceeded(
-                        opus_calls_used, opus_tokens_used, estimated_retry, routing
-                    ):
-                        retry_model_key = "openai"
-                        retry_rewrite_r = rewrite_r_openai
-                try:
-                    rewrite_retry = invoke_with_retry_fn(
-                        retry_rewrite_r.invoke,
-                        {
-                            **merged_for_diag,
-                            "diagnosis": diagnosis,
-                            "persona_instruction": persona_hint,
-                        },
-                    )
-                    # F-13-4: 페르소나 재시도 Opus 사용량 업데이트
-                    if retry_model_key == "opus":
-                        opus_calls_used += 1
-                        opus_tokens_used += _count_tokens_approx(
-                            [current_prompt, str(rewrite_retry)]
-                        )
-                    improved_retry = str(
-                        rewrite_retry.get("improved_prompt") or ""
-                    ).strip()
-                    if improved_retry and improved_retry != current_prompt:
-                        retry_record = {
-                            "iteration": iter_no,
-                            "input_prompt": current_prompt,
-                            "improved_prompt": improved_retry,
-                            "diagnosis_raw": diagnosis,
-                            "weighted": weighted,
-                            "rewrite": rewrite_retry,
-                            "rewrite_model_key": retry_model_key,
-                            "strategy": pattern,
-                            "persona": persona,
-                        }
-                        history.append(retry_record)
-                        current_prompt = improved_retry
-                        prev_score = score
-                        continue
-                except Exception:
-                    pass
-            break
-        prev_score = score
-        current_prompt = improved
-
-    # F-13-1: 루프 종료 후 최적 이터레이션 선택
     best = _select_best_iteration(history)
-    best_iter_no = int(best.get("iteration") or 0)
+    best_iter_no = int(best.get("iteration") or 0) if best else None
     return {
         "best": best,
         "history": history,

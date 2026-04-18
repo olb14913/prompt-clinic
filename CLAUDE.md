@@ -11,8 +11,8 @@
 - `chains/diagnosis_chain.py` : Chain 2 — 4항목 진단 + Few-shot 로드 + F-25-2 행위축 가중치 + F-16-3 RAG 주입
 - `chains/rewrite_chain.py` : Chain 3 — 개선 프롬프트 생성 (persona_instruction 선택 주입) + F-16-3 RAG 주입
 - `chains/pipeline.py` : 기본 3체인 조립 (LCEL)
-- `chains/model_router.py` : 점수 기반 모델 라우팅(OpenAI ↔ Opus) 설정
-- `chains/self_improve_chain.py` : F-09/F-13 자가개선 루프 + Best-of-N + 전략/페르소나 전환(F-22-1/2/3 통합)
+- `chains/model_router.py` : Phase 기반 모델 라우팅 설정 (Phase 1=OpenAI, Phase 2=Opus)
+- `chains/self_improve_chain.py` : F-09/F-13 자가개선 루프 (Phase 1=OpenAI 최대 3회, Phase 2=Opus 최대 3회) + Best-of-N + 전략/페르소나 전환(F-22-1/2/3 통합)
 - `chains/gate_chain.py` : F-20-1/2/3 모호성 게이트 체인 + 소크라테스 질문 체인
 - `chains/drift_chain.py` : F-23-2 의도 드리프트 점수 산출 (3축 보존도 평가)
 - `utils/notion.py` : Notion 저장 + Notion few-shot 조회 + F-15-2 fewshot DB write-back
@@ -69,9 +69,8 @@ OPENAI_REWRITE_MODEL=gpt-4o      # 재작성 체인 모델 (기본: OPENAI_MODEL
 
 # F-09/F-13 자가개선 루프
 SELF_IMPROVE_ENABLED=false
-SELF_IMPROVE_MAX_ITERS=3
-OPUS_SCORE_THRESHOLD=70
-ANTHROPIC_API_KEY=               # Opus 활성화 시 필수
+# SELF_IMPROVE_MAX_ITERS는 현재 미사용 — Phase 1은 3회, Phase 2는 3회로 하드코딩
+ANTHROPIC_API_KEY=               # Opus(Phase 2) 활성화 시 필수
 ANTHROPIC_MODEL_OPUS=claude-3-opus-20240229
 
 # Notion 저장 (진단 결과 수동 아카이빙)
@@ -166,7 +165,7 @@ requirements.txt
 
 ### F-09 자가개선 루프 / 모델 라우팅
 - [x] F-09-1 `chains/self_improve_chain.py` 추가 (개선→재진단 반복)
-- [x] F-09-2 점수 기반 rewrite 모델 라우팅(OpenAI ↔ Opus)
+- [x] F-09-2 Phase 기반 모델 라우팅 (Phase 1=OpenAI 전담, Phase 2=Opus 전담 — 점수 기반 라우팅 제거)
 - [x] F-09-3 feature flag (`SELF_IMPROVE_ENABLED`) 기본 OFF
 - [x] F-09-4 루프 전략 다변화 → **F-13-2로 구현 완료** (정체 패턴 감지 + 페르소나 전환)
 - [x] F-09-5 루프 상세 결과 시각화 → **F-13-3으로 구현 완료** (반복 이력 카드 UI)
@@ -202,7 +201,7 @@ requirements.txt
 - [x] F-20-4 프로세스 상태 인디케이터 → **F-13-3에 통합** (독립 UI 폐기. 맥락 분석 중 › 목표 확인 완료 › 제약사항 검토 중)
 
 ### F-21 PAL 라우터 3단계 고도화 — ⛔ 폐기
-> v0.2 범위 외. 현재 2-tier 라우팅(OpenAI ↔ Opus) 유지.
+> v0.2 범위 외. Phase 1(OpenAI) → Phase 2(Opus) 2단계 루프로 대체 구현.
 
 ### F-22 페르소나 회전 전략 — ✅ F-13-2에 통합 완료
 > F-22-1(정체 패턴 감지) / F-22-2(페르소나 자동 선택) / F-22-3(페르소나 재작성 지시문) 모두

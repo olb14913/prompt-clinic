@@ -1,4 +1,4 @@
-"""점수 기반 LLM 라우팅 유틸."""
+"""LLM 라우팅 유틸."""
 
 from __future__ import annotations
 
@@ -32,11 +32,8 @@ class RoutingConfig:
     openai_diagnosis_model: str
     openai_rewrite_model: str
     opus_model: str
-    opus_threshold: int
     self_improve_enabled: bool
     self_improve_max_iterations: int
-    opus_max_calls: int
-    opus_max_tokens: int
 
 
 def read_routing_config() -> RoutingConfig:
@@ -51,11 +48,8 @@ def read_routing_config() -> RoutingConfig:
             "OPENAI_REWRITE_MODEL", base_openai_model
         ),
         opus_model=os.environ.get("ANTHROPIC_MODEL_OPUS", "claude-3-opus-20240229"),
-        opus_threshold=max(0, min(100, _env_int("OPUS_SCORE_THRESHOLD", 70))),
         self_improve_enabled=_env_bool("SELF_IMPROVE_ENABLED", False),
         self_improve_max_iterations=max(1, _env_int("SELF_IMPROVE_MAX_ITERS", 3)),
-        opus_max_calls=max(0, _env_int("OPUS_MAX_CALLS", 5)),
-        opus_max_tokens=max(0, _env_int("OPUS_MAX_TOKENS", 0)),
     )
 
 
@@ -65,17 +59,6 @@ def make_openai_llm(model_name: str, temperature: float) -> ChatOpenAI:
 
 def build_openai_rewrite_llm(config: RoutingConfig) -> ChatOpenAI:
     return make_openai_llm(config.openai_rewrite_model, config.temperature)
-
-
-def resolve_rewrite_model_key(
-    score: int,
-    *,
-    has_opus: bool,
-    threshold: int,
-) -> str:
-    if has_opus and score >= threshold:
-        return "opus"
-    return "openai"
 
 
 def build_opus_llm(config: RoutingConfig) -> Any | None:
