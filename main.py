@@ -721,6 +721,30 @@ section[data-testid="stSidebar"] {{
   font-weight: 600 !important;
   min-height: 38px !important;
 }}
+
+/* 진단 시작 버튼 - 기본(입력 전) 회색 직사각형 */
+.st-key-pc_input_shell div[data-testid="stButton"] button[kind="secondary"] {{
+  background-color: #9e9e9e !important;
+  border: 1px solid #9e9e9e !important;
+  color: #ffffff !important;
+  border-radius: 8px !important;
+  font-weight: 600 !important;
+  min-height: 38px !important;
+}}
+
+/* disabled 상태여도 흐려지지 않게 유지 */
+.st-key-pc_input_shell div[data-testid="stButton"] button[kind="secondary"]:disabled {{
+  background-color: #9e9e9e !important;
+  border: 1px solid #9e9e9e !important;
+  color: #ffffff !important;
+  border-radius: 8px !important;
+  font-weight: 600 !important;
+  min-height: 38px !important;
+  opacity: 1 !important;
+  cursor: not-allowed !important;
+  -webkit-text-fill-color: #ffffff !important;
+}}
+
 /* 진단 시작 제외: 개선 포인트 pill만 전역 primary/secondary 규칙 덮어쓰기 */
 .st-key-pc_input_shell .st-key-pc_goal_pills div[data-testid="stButton"] button {{
   width: 100% !important;
