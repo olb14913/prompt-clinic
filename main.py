@@ -576,6 +576,23 @@ section[data-testid="stSidebar"] {{
   color: #6c6c6c;
   margin: 0.2rem 0 0.5rem 0;
 }}
+.pc-policy-note {{
+  font-size: 11px;
+  color: #8a8a8a;
+  line-height: 1.6;
+  margin: 0.35rem 0 0.55rem 0;
+  white-space: nowrap;
+}}
+
+.pc-policy-note a {{
+  color: #7a7a7a;
+  font-weight: 700;
+  text-decoration: underline;
+}}
+
+.pc-policy-note a:hover {{
+  color: #5f5f5f;
+}}
 /* 개선 포인트: primary/secondary 동일 높이·작은 글자·한 줄 */
 .st-key-pc_goal_pills div[data-testid="stHorizontalBlock"] {{
   gap: 0.2rem !important;
@@ -1933,42 +1950,42 @@ span[data-baseweb="tag"] {
             unsafe_allow_html=True,
         )
 
-        _sp, run_col = st.columns([3.5, 1])
+        _privacy_url = os.environ.get(
+            "PRIVACY_POLICY_URL",
+            "https://www.notion.so/Prompt-Clinic-34340cb3731d80eeb2d8cad538a3fe67",
+        )
+        _service_url = os.environ.get(
+            "SERVICE_POLICY_URL",
+            "https://www.notion.so/Prompt-Clinic-34340cb3731d80edb1cbefcf197078d7",
+        )
 
-        with _sp:
-            _privacy_url = os.environ.get(
-                "PRIVACY_POLICY_URL",
-                "https://www.notion.so/Prompt-Clinic-34340cb3731d80eeb2d8cad538a3fe67",
-            )
-            _service_url = os.environ.get(
-                "SERVICE_POLICY_URL",
-                "https://www.notion.so/Prompt-Clinic-34340cb3731d80edb1cbefcf197078d7",
-            )
-            st.markdown(
-                f"""
-                <div style="font-size:11px;color:#8a8a8a;line-height:1.6;margin:0.35rem 0 0 0;">
-                    <a href="{_service_url}" target="_blank" rel="noopener noreferrer"
-                       style="color:#7a7a7a;font-weight:700;text-decoration:underline;">서비스이용정책</a>
-                    및
-                    <a href="{_privacy_url}" target="_blank" rel="noopener noreferrer"
-                       style="color:#7a7a7a;font-weight:700;text-decoration:underline;">개인정보처리방침</a>
-                    에 따라 입력하신 프롬프트는 서비스 품질 개선을 위한 학습 데이터로 활용될 수 있습니다.
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-            
+        st.markdown(
+            f"""
+            <div class="pc-policy-note">
+                <a href="{_service_url}" target="_blank" rel="noopener noreferrer">서비스이용정책</a>
+                및
+                <a href="{_privacy_url}" target="_blank" rel="noopener noreferrer">개인정보처리방침</a>
+                에 따라 입력하신 프롬프트는 서비스 품질 개선을 위한 학습 데이터로 활용될 수 있습니다.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        _left_spacer, run_col = st.columns([4.2, 1])
+
+        with _left_spacer:
+            st.empty()
+
         with run_col:
-            is_enabled = form_ready or auto_trigger  
-        
+            is_enabled = form_ready or auto_trigger
+
             run = st.button(
-                "🩺 진단 시작",   
-                type="primary" if is_enabled else "secondary",  
+                "🩺 진단 시작",
+                type="primary" if is_enabled else "secondary",
                 use_container_width=True,
                 key="pc_run_diagnosis",
-                disabled=not is_enabled,  
+                disabled=not is_enabled,
             )
-
     sync_prompt_from_widget = True
 
     if st.session_state.get("pc_manual_retry_diagnosis"):
