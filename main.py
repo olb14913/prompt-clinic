@@ -610,15 +610,7 @@ section[data-testid="stSidebar"] {{
   gap: 0.45rem;
   margin: 0.35rem 0 0.6rem 0;
 }}
-.st-key-pc_input_shell div[data-testid="stButton"] button[kind="secondary"] {{
-  background-color: #ffffff !important;
-  border: 1px solid {UI_BORDER_ALTO} !important;
-  color: #374151 !important;
-  border-radius: 999px !important;
-  font-weight: 600 !important;
-  font-size: 13px !important;
-  min-height: 36px !important;
-}}
+
 .st-key-pc_input_shell [data-baseweb="input"] input,
 .st-key-pc_input_shell [data-baseweb="textarea"] textarea {{
   background-color: {UI_BEFORE_BG} !important;
@@ -730,6 +722,11 @@ section[data-testid="stSidebar"] {{
   border-radius: 8px !important;
   font-weight: 600 !important;
   min-height: 38px !important;
+  width: 100% !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 6px !important;
 }}
 
 /* 진단 시작 버튼 disabled 상태 */
@@ -740,8 +737,28 @@ section[data-testid="stSidebar"] {{
   border-radius: 8px !important;
   font-weight: 600 !important;
   min-height: 38px !important;
+  width: 100% !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 6px !important;
   opacity: 1 !important;
   cursor: not-allowed !important;
+  -webkit-text-fill-color: #ffffff !important;
+}}
+
+/* 버튼 내부 텍스트/아이콘도 흰색 고정 */
+.st-key-pc_run_diagnosis button[kind="secondary"] * {{
+  color: #ffffff !important;
+  fill: #ffffff !important;
+  stroke: #ffffff !important;
+  -webkit-text-fill-color: #ffffff !important;
+}}
+
+.st-key-pc_run_diagnosis button[kind="secondary"]:disabled * {{
+  color: #ffffff !important;
+  fill: #ffffff !important;
+  stroke: #ffffff !important;
   -webkit-text-fill-color: #ffffff !important;
 }}
 
@@ -758,6 +775,7 @@ section[data-testid="stSidebar"] {{
   border-radius: 999px !important;
   box-sizing: border-box !important;
 }}
+
 .st-key-pc_input_shell .st-key-pc_goal_pills div[data-testid="stButton"] button[kind="primary"] {{
   background-color: {UI_PRIMARY_BLUE} !important;
   border-color: {UI_PRIMARY_BLUE} !important;
