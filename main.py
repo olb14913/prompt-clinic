@@ -617,15 +617,15 @@ section[data-testid="stSidebar"] {{
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05) !important;
 }}
 
-.st-key-output_format_field [data-baseweb="select"] span {
+.st-key-output_format_field [data-baseweb="select"] span {{
   color: #636363 !important;
   font-size: 14px !important;
   font-weight: 500 !important;
-}
+}}
 
-.st-key-output_format_field [data-baseweb="select"] svg {
+.st-key-output_format_field [data-baseweb="select"] svg {{
   color: #636363 !important;
-}
+}}
 
 /* 맥락 수집 2열: 라벨 줄 높이·컨트롤 상단선 수평 정렬 */
 .st-key-pc_context_row div[data-testid="stHorizontalBlock"] {{
