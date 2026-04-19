@@ -1915,6 +1915,17 @@ span[data-baseweb="tag"] {
                 label_visibility="collapsed",
                 max_chars=500,
             )
+            st.markdown(
+                f"""
+                <div class="pc-policy-note">
+                    <a href="{_service_url}" target="_blank" rel="noopener noreferrer">서비스이용정책</a>
+                    및
+                    <a href="{_privacy_url}" target="_blank" rel="noopener noreferrer">개인정보처리방침</a>
+                    에 따라 입력하신 프롬프트는 서비스 품질 개선을 위한 학습 데이터로 활용될 수 있습니다.
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
         inject_live_counter(container_key="user_prompt_field", limit=500)
 
@@ -1959,17 +1970,6 @@ span[data-baseweb="tag"] {
             "https://www.notion.so/Prompt-Clinic-34340cb3731d80edb1cbefcf197078d7",
         )
 
-        st.markdown(
-            f"""
-            <div class="pc-policy-note">
-                <a href="{_service_url}" target="_blank" rel="noopener noreferrer">서비스이용정책</a>
-                및
-                <a href="{_privacy_url}" target="_blank" rel="noopener noreferrer">개인정보처리방침</a>
-                에 따라 입력하신 프롬프트는 서비스 품질 개선을 위한 학습 데이터로 활용될 수 있습니다.
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
 
         _left_spacer, run_col = st.columns([4.2, 1])
 
