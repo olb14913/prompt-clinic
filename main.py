@@ -722,8 +722,8 @@ section[data-testid="stSidebar"] {{
   min-height: 38px !important;
 }}
 
-/* 진단 시작 버튼 - 기본(입력 전) 회색 직사각형 */
-.st-key-pc_input_shell div[data-testid="stButton"] button[kind="secondary"] {{
+/* 진단 시작 버튼만 회색 직사각형으로 */
+.st-key-pc_run_diagnosis button[kind="secondary"] {{
   background-color: #9e9e9e !important;
   border: 1px solid #9e9e9e !important;
   color: #ffffff !important;
@@ -732,8 +732,8 @@ section[data-testid="stSidebar"] {{
   min-height: 38px !important;
 }}
 
-/* disabled 상태여도 흐려지지 않게 유지 */
-.st-key-pc_input_shell div[data-testid="stButton"] button[kind="secondary"]:disabled {{
+/* 진단 시작 버튼 disabled 상태 */
+.st-key-pc_run_diagnosis button[kind="secondary"]:disabled {{
   background-color: #9e9e9e !important;
   border: 1px solid #9e9e9e !important;
   color: #ffffff !important;
@@ -745,7 +745,7 @@ section[data-testid="stSidebar"] {{
   -webkit-text-fill-color: #ffffff !important;
 }}
 
-/* 진단 시작 제외: 개선 포인트 pill만 전역 primary/secondary 규칙 덮어쓰기 */
+/* 진단 시작 제외: 개선 포인트 pill만 전용 스타일 */
 .st-key-pc_input_shell .st-key-pc_goal_pills div[data-testid="stButton"] button {{
   width: 100% !important;
   min-height: 34px !important;
@@ -768,11 +768,19 @@ section[data-testid="stSidebar"] {{
   border: 1px solid {UI_BORDER_ALTO} !important;
   color: #374151 !important;
 }}
+.st-key-pc_input_shell .st-key-pc_goal_pills div[data-testid="stButton"] button[kind="secondary"]:disabled {{
+  background-color: #ffffff !important;
+  border: 1px solid {UI_BORDER_ALTO} !important;
+  color: #374151 !important;
+  opacity: 1 !important;
+  cursor: not-allowed !important;
+  -webkit-text-fill-color: #374151 !important;
+}}
 .pc-bullet-blue {{
   color: {UI_PRIMARY_BLUE};
   font-weight: 700;
   margin-right: 0.25rem;
-}}
+}} 
 .pc-change-line {{
   margin: 0.35rem 0;
   line-height: 1.45;
