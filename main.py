@@ -1894,6 +1894,16 @@ span[data-baseweb="tag"] {
         _up_prev = str(st.session_state.get("user_prompt_input") or "")
         _prompt_len_err_label = len(_up_prev) > 500
 
+
+        _service_url = os.environ.get(
+            "SERVICE_POLICY_URL",
+            "https://www.notion.so/Prompt-Clinic-34340cb3731d80edb1cbefcf197078d7",
+        )
+        _privacy_url = os.environ.get(
+            "PRIVACY_POLICY_URL",
+            "https://www.notion.so/Prompt-Clinic-34340cb3731d80eeb2d8cad538a3fe67",
+        )
+
         with st.container(key="user_prompt_field"):
             st.markdown(
                 '<div class="pc-label-row">'
@@ -1960,16 +1970,6 @@ span[data-baseweb="tag"] {
     """,
             unsafe_allow_html=True,
         )
-
-        _privacy_url = os.environ.get(
-            "PRIVACY_POLICY_URL",
-            "https://www.notion.so/Prompt-Clinic-34340cb3731d80eeb2d8cad538a3fe67",
-        )
-        _service_url = os.environ.get(
-            "SERVICE_POLICY_URL",
-            "https://www.notion.so/Prompt-Clinic-34340cb3731d80edb1cbefcf197078d7",
-        )
-
 
         _left_spacer, run_col = st.columns([4.2, 1])
 
