@@ -1946,8 +1946,13 @@ span[data-baseweb="tag"] {
             )
             st.markdown(
                 f"""
-                <div style="font-size:11px;color:#6c6c6c;line-height:1.6;margin:0.45rem 0 0 0;">
-                    서비스이용정책 및 개인정보처리방침에 따라 입력하신 프롬프트는 서비스 품질 개선을 위한 학습 데이터로 활용될 수 있습니다.
+                <div style="font-size:11px;color:#8a8a8a;line-height:1.6;margin:0.35rem 0 0 0;">
+                    <a href="{_service_url}" target="_blank" rel="noopener noreferrer"
+                       style="color:#7a7a7a;font-weight:700;text-decoration:underline;">서비스이용정책</a>
+                    및
+                    <a href="{_privacy_url}" target="_blank" rel="noopener noreferrer"
+                       style="color:#7a7a7a;font-weight:700;text-decoration:underline;">개인정보처리방침</a>
+                    에 따라 입력하신 프롬프트는 서비스 품질 개선을 위한 학습 데이터로 활용될 수 있습니다.
                 </div>
                 """,
                 unsafe_allow_html=True,
