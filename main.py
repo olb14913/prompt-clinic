@@ -1740,55 +1740,55 @@ span[data-baseweb="tag"] {
                 max_chars=20,
             )
 
-    components.html(
-        """
-        <script>
-        (function() {
-        const doc = window.parent.document;
-
-        function mountPromptNameCounter() {
-            const wrapper = doc.querySelector('.st-key-prompt_name_field');
-            if (!wrapper) return false;
-
-            const inputShell = wrapper.querySelector('[data-testid="stTextInput"]');
-            if (!inputShell) return false;
-
-            const input = inputShell.querySelector('input');
-            if (!input) return false;
-
-            inputShell.classList.add('pc-input-counter-target');
-
-            let counter = inputShell.querySelector('.pc-input-counter');
-            if (!counter) {
-            counter = doc.createElement('div');
-            counter.className = 'pc-input-counter';
-            inputShell.appendChild(counter);
+        components.html(
+            """
+            <script>
+            (function() {
+            const doc = window.parent.document;
+    
+            function mountPromptNameCounter() {
+                const wrapper = doc.querySelector('.st-key-prompt_name_field');
+                if (!wrapper) return false;
+    
+                const inputShell = wrapper.querySelector('[data-testid="stTextInput"]');
+                if (!inputShell) return false;
+    
+                const input = inputShell.querySelector('input');
+                if (!input) return false;
+    
+                inputShell.classList.add('pc-input-counter-target');
+    
+                let counter = inputShell.querySelector('.pc-input-counter');
+                if (!counter) {
+                counter = doc.createElement('div');
+                counter.className = 'pc-input-counter';
+                inputShell.appendChild(counter);
+                }
+    
+                function renderCount() {
+                counter.textContent = `${input.value.length} / 20`;
+                }
+    
+                if (!input.dataset.pcPromptCounterBound) {
+                input.addEventListener('input', renderCount);
+                input.dataset.pcPromptCounterBound = '1';
+                }
+    
+                renderCount();
+                return true;
             }
-
-            function renderCount() {
-            counter.textContent = `${input.value.length} / 20`;
-            }
-
-            if (!input.dataset.pcPromptCounterBound) {
-            input.addEventListener('input', renderCount);
-            input.dataset.pcPromptCounterBound = '1';
-            }
-
-            renderCount();
-            return true;
-        }
-
-        let tries = 0;
-        const timer = setInterval(() => {
-            const ok = mountPromptNameCounter();
-            tries += 1;
-            if (ok || tries > 40) clearInterval(timer);
-        }, 150);
-        })();
-        </script>
-        """,
-        height=0,
-    )
+    
+            let tries = 0;
+            const timer = setInterval(() => {
+                const ok = mountPromptNameCounter();
+                tries += 1;
+                if (ok || tries > 40) clearInterval(timer);
+            }, 150);
+            })();
+            </script>
+            """,
+            height=0,
+        )
 
         with st.container(key="pc_context_row"):
             col_purpose, col_fmt = st.columns([1.85, 1], vertical_alignment="top")
