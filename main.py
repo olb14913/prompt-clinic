@@ -44,11 +44,11 @@ load_dotenv()
 OUTPUT_FORMAT_OPTIONS = ["텍스트", "리스트", "표", "코드", "JSON"]
 _OUTPUT_FORMAT_LEGACY = {"글": "텍스트"}
 IMPROVEMENT_OPTIONS = [
-    "토큰 줄이기",
-    "일관성 높이기",
-    "맥락 보완",
     "출력 품질 높이기",
+    "맥락 보완",
     "구조화",
+    "일관성 높이기",
+    "토큰 줄이기",
 ]
 
 CRITERION_LABELS = {
@@ -132,20 +132,27 @@ def _normalize_output_format_option(val: str) -> str:
 
 
 def _render_improvement_point_buttons() -> list[str]:
-    """와이어 태그 버튼 — 세션 키 improvement_goals_input 유지."""
+    """개선 포인트 버튼형 다중 선택: min 1 / max 3."""
     if "improvement_goals_input" not in st.session_state:
         st.session_state.improvement_goals_input = []
+
     sel: list[str] = list(st.session_state.improvement_goals_input)
+    max_selected = 3
+
     with st.container(key="pc_goal_pills"):
         gc = st.columns(5, gap="small")
+
         for i, opt in enumerate(IMPROVEMENT_OPTIONS):
             with gc[i]:
                 active = opt in sel
+                disabled = (not active) and (len(sel) >= max_selected)
+
                 if st.button(
                     opt,
                     key=f"pc_goal_btn_{i}",
                     type="primary" if active else "secondary",
                     use_container_width=True,
+                    disabled=disabled,
                 ):
                     if active:
                         st.session_state.improvement_goals_input = [
@@ -154,6 +161,7 @@ def _render_improvement_point_buttons() -> list[str]:
                     else:
                         st.session_state.improvement_goals_input = [*sel, opt]
                     st.rerun()
+
     return list(st.session_state.get("improvement_goals_input") or [])
 
 
@@ -608,6 +616,17 @@ section[data-testid="stSidebar"] {{
   border-radius: 6px !important;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05) !important;
 }}
+
+.st-key-output_format_field [data-baseweb="select"] span {
+  color: #636363 !important;
+  font-size: 14px !important;
+  font-weight: 500 !important;
+}
+
+.st-key-output_format_field [data-baseweb="select"] svg {
+  color: #636363 !important;
+}
+
 /* 맥락 수집 2열: 라벨 줄 높이·컨트롤 상단선 수평 정렬 */
 .st-key-pc_context_row div[data-testid="stHorizontalBlock"] {{
   align-items: flex-start !important;
@@ -1721,55 +1740,55 @@ span[data-baseweb="tag"] {
                 max_chars=20,
             )
 
-        st.markdown(
-            """
-            <script>
-            (function() {
-            const doc = window.parent.document;
+    components.html(
+        """
+        <script>
+        (function() {
+        const doc = window.parent.document;
 
-            function mountPromptNameCounter() {
-                const wrapper = doc.querySelector('.st-key-prompt_name_field');
-                if (!wrapper) return false;
+        function mountPromptNameCounter() {
+            const wrapper = doc.querySelector('.st-key-prompt_name_field');
+            if (!wrapper) return false;
 
-                const inputShell = wrapper.querySelector('[data-testid="stTextInput"]');
-                if (!inputShell) return false;
+            const inputShell = wrapper.querySelector('[data-testid="stTextInput"]');
+            if (!inputShell) return false;
 
-                const input = inputShell.querySelector('input');
-                if (!input) return false;
+            const input = inputShell.querySelector('input');
+            if (!input) return false;
 
-                inputShell.classList.add('pc-input-counter-target');
+            inputShell.classList.add('pc-input-counter-target');
 
-                let counter = inputShell.querySelector('.pc-input-counter');
-                if (!counter) {
-                counter = doc.createElement('div');
-                counter.className = 'pc-input-counter';
-                inputShell.appendChild(counter);
-                }
-
-                function renderCount() {
-                counter.textContent = `${input.value.length} / 20`;
-                }
-
-                if (!input.dataset.pcPromptCounterBound) {
-                input.addEventListener('input', renderCount);
-                input.dataset.pcPromptCounterBound = '1';
-                }
-
-                renderCount();
-                return true;
+            let counter = inputShell.querySelector('.pc-input-counter');
+            if (!counter) {
+            counter = doc.createElement('div');
+            counter.className = 'pc-input-counter';
+            inputShell.appendChild(counter);
             }
 
-            let tries = 0;
-            const timer = setInterval(() => {
-                const ok = mountPromptNameCounter();
-                tries += 1;
-                if (ok || tries > 20) clearInterval(timer);
-            }, 150);
-            })();
-            </script>
-            """,
-            unsafe_allow_html=True,
-        )
+            function renderCount() {
+            counter.textContent = `${input.value.length} / 20`;
+            }
+
+            if (!input.dataset.pcPromptCounterBound) {
+            input.addEventListener('input', renderCount);
+            input.dataset.pcPromptCounterBound = '1';
+            }
+
+            renderCount();
+            return true;
+        }
+
+        let tries = 0;
+        const timer = setInterval(() => {
+            const ok = mountPromptNameCounter();
+            tries += 1;
+            if (ok || tries > 40) clearInterval(timer);
+        }, 150);
+        })();
+        </script>
+        """,
+        height=0,
+    )
 
         with st.container(key="pc_context_row"):
             col_purpose, col_fmt = st.columns([1.85, 1], vertical_alignment="top")
@@ -1815,13 +1834,8 @@ span[data-baseweb="tag"] {
         goals_err = len(st.session_state.get("improvement_goals_input") or []) == 0
         st.markdown(
             '<div class="pc-label-row">'
-            '<span class="pc-wire-muted" style="margin:0;">개선 포인트 (1개 이상 선택)</span>'
-            + (
-                '<span class="pc-inline-err">1개 이상 선택해주세요.</span>'
-                if goals_err
-                else ""
-            )
-            + "</div>",
+            '<span class="pc-wire-muted" style="margin:0;">개선 포인트 (최대 3개 선택 가능)</span>'
+            "</div>",
             unsafe_allow_html=True,
         )
         improvement_goals = _render_improvement_point_buttons()
@@ -1845,7 +1859,7 @@ span[data-baseweb="tag"] {
             user_prompt = st.text_area(
                 "진단할 프롬프트",
                 height=220,
-                placeholder="예 : 앱을 위한 기획서 작성해줘",
+                placeholder="예 : 너는 AI 챗봇이야. 사용자 질문에 잘 대답해줘. 친절하게 해줘.",
                 key="user_prompt_input",
                 label_visibility="collapsed",
                 max_chars=500,
