@@ -629,6 +629,7 @@ section[data-testid="stSidebar"] {{
 
 .pc-context-field-label {{
   color: #636363 !important;
+  font-weight : 500 !important;
 }}
 
 /* 맥락 수집 2열: 라벨 줄 높이·컨트롤 상단선 수평 정렬 */
@@ -821,13 +822,42 @@ div[data-testid="stHorizontalBlock"]:has([data-testid="stDownloadButton"])
   font-weight: 600;
   color: #fff;
 }}
-.pc-footer {{
+
+.pc-footer-wrap {{
   text-align: center;
-  color: {UI_DOVE_GRAY};
-  font-size: 0.85rem;
   margin-top: 2rem;
   padding-top: 1rem;
 }}
+
+.pc-footer-links {{
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  color: {UI_DOVE_GRAY};
+  margin-bottom: 6px;
+}}
+
+.pc-footer-links a {{
+  color: {UI_DOVE_GRAY};
+  text-decoration: underline;
+}}
+
+.pc-footer-links a:hover {{
+  color: #4b4b4b;
+}}
+
+.pc-footer-divider {{
+  color: #9a9a9a;
+}}
+
+.pc-footer-copy {{
+  color: {UI_DOVE_GRAY};
+  font-size: 0.85rem;
+}}
+
 .block-container {{
   max-width: 819px !important;
   margin-left: auto !important;
@@ -1871,12 +1901,6 @@ span[data-baseweb="tag"] {
 
         inject_live_counter(container_key="user_prompt_field", limit=500)
 
-        st.markdown(
-            f'<div class="pc-char-user-prompt">'
-            f"{len((user_prompt or ''))} / 500</div>",
-            unsafe_allow_html=True,
-        )
-
         p_len = len((purpose or ""))
         t_len = len((user_prompt or ""))
         pn = (prompt_name or "").strip()
@@ -1910,7 +1934,7 @@ span[data-baseweb="tag"] {
         )
 
         _sp, run_col = st.columns([3.5, 1])
-        
+
         with _sp:
             _privacy_url = os.environ.get(
                 "PRIVACY_POLICY_URL",
@@ -1921,24 +1945,25 @@ span[data-baseweb="tag"] {
                 "https://www.notion.so/Prompt-Clinic-34340cb3731d80edb1cbefcf197078d7",
             )
             st.markdown(
-                f'<p style="font-size:11px;color:#6c6c6c;line-height:1.6;margin:0.45rem 0 0 0;">'
-                f"진단 결과는 서비스 개선을 위한 학습 데이터로 활용될 수 있습니다.<br>"
-                f'<a href="{_service_url}" target="_blank" rel="noopener noreferrer" '
-                f'style="color:{UI_PRIMARY_BLUE};text-decoration:none;">서비스 이용정책 →</a>'
-                f'&nbsp;&nbsp;'
-                f'<a href="{_privacy_url}" target="_blank" rel="noopener noreferrer" '
-                f'style="color:{UI_PRIMARY_BLUE};text-decoration:none;">개인정보처리방침 →</a>'
-                f"</p>",
+                f"""
+                <div style="font-size:11px;color:#6c6c6c;line-height:1.6;margin:0.45rem 0 0 0;">
+                    서비스이용정책 및 개인정보처리방침에 따라 입력하신 프롬프트는 서비스 품질 개선을 위한 학습 데이터로 활용될 수 있습니다.
+                </div>
+                """,
                 unsafe_allow_html=True,
             )
+            
         with run_col:
+            is_enabled = form_ready or auto_trigger  
+        
             run = st.button(
-                "진단 시작",
-                type="primary",
+                "🩺 진단 시작",   
+                type="primary" if is_enabled else "secondary",  
                 use_container_width=True,
                 key="pc_run_diagnosis",
-                disabled=not form_ready and not auto_trigger,
+                disabled=not is_enabled,  
             )
+
     sync_prompt_from_widget = True
 
     if st.session_state.get("pc_manual_retry_diagnosis"):
@@ -2159,10 +2184,29 @@ span[data-baseweb="tag"] {
         height=0,
     )
 
+    _privacy_url = os.environ.get(
+        "PRIVACY_POLICY_URL",
+        "https://www.notion.so/Prompt-Clinic-34340cb3731d80eeb2d8cad538a3fe67",
+    )
+    _service_url = os.environ.get(
+        "SERVICE_POLICY_URL",
+        "https://www.notion.so/Prompt-Clinic-34340cb3731d80edb1cbefcf197078d7",
+    )
+
     st.markdown(
-        '<p class="pc-footer">© 2026 Team 토큰부족. All rights reserved.</p>',
+        f"""
+        <div class="pc-footer-wrap">
+            <div class="pc-footer-links">
+                <a href="{_service_url}" target="_blank" rel="noopener noreferrer">서비스이용정책</a>
+                <span class="pc-footer-divider">|</span>
+                <a href="{_privacy_url}" target="_blank" rel="noopener noreferrer">개인정보처리방침</a>
+            </div>
+            <div class="pc-footer-copy">© 2026 Team 토큰부족. All rights reserved.</div>
+        </div>
+        """,
         unsafe_allow_html=True,
     )
+
 
     if sync_prompt_from_widget:
         st.session_state.rediagnose_prompt = user_prompt
