@@ -627,6 +627,10 @@ section[data-testid="stSidebar"] {{
   color: #636363 !important;
 }}
 
+.pc-context-field-label {{
+  color: #636363 !important;
+}}
+
 /* 맥락 수집 2열: 라벨 줄 높이·컨트롤 상단선 수평 정렬 */
 .st-key-pc_context_row div[data-testid="stHorizontalBlock"] {{
   align-items: flex-start !important;
