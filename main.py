@@ -1059,6 +1059,38 @@ div[data-testid="stHorizontalBlock"]:has([data-testid="stDownloadButton"])
   padding-bottom: 28px !important;
 }}
 
+/* 로딩 상태 바 (피그마 S-03 — 맥락 수집 카드 하단 외부) */
+.pc-loading-bar {{
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #ffffff;
+  border: 1px solid {UI_BORDER_ALTO};
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin: 8px 0 12px 0;
+  min-height: 48px;
+}}
+.pc-loading-text {{
+  font-size: 14px;
+  font-weight: 600;
+  color: #0b0b0b;
+  line-height: 1.4;
+}}
+@keyframes pc-dot-blink {{
+  0%, 80%, 100% {{ opacity: 0; }}
+  40% {{ opacity: 1; }}
+}}
+.pc-dot {{
+  animation: pc-dot-blink 1.4s infinite;
+  font-size: 14px;
+  font-weight: 600;
+  color: #0b0b0b;
+}}
+.pc-d1 {{ animation-delay: 0s; }}
+.pc-d2 {{ animation-delay: 0.23s; }}
+.pc-d3 {{ animation-delay: 0.46s; }}
+
 </style>
 """,
         unsafe_allow_html=True,
@@ -1183,6 +1215,19 @@ def _pc_phase_banner(label: str) -> str:
     )
 
 
+def _pc_loading_bar(label: str) -> str:
+    """피그마 S-03 로딩 바: 카드 하단 외부, 아이콘 + 텍스트 + 말줄임표 애니메이션."""
+    text = html.escape((label or "").rstrip(".").rstrip(), quote=False)
+    return (
+        '<div class="pc-loading-bar">'
+        f'<span class="pc-loading-text">{text}</span>'
+        '<span class="pc-dot pc-d1">.</span>'
+        '<span class="pc-dot pc-d2">.</span>'
+        '<span class="pc-dot pc-d3">.</span>'
+        '</div>'
+    )
+
+
 def _make_retry_phase_cb(
     phase_slot: Any, step_label: str
 ) -> Callable[[int, int], None]:
@@ -1302,6 +1347,7 @@ def _run_diagnosis(
     improvement_goals: list[str],
     text: str,
     auto_trigger: bool,
+    phase_slot: Any = None,
 ) -> None:
     """LLM 체인 실행 및 결과를 session_state에 저장."""
     st.session_state.gate_result = None
@@ -1323,15 +1369,14 @@ def _run_diagnosis(
         "improvement_goals": list(improvement_goals),
         "user_prompt": text,
     }
-    phase_slot: Any = None
     try:
-        phase_slot = st.empty()
+        if phase_slot is None:
+            phase_slot = st.empty()
 
         def _set_phase(msg: str) -> None:
-            phase_slot.markdown(_pc_phase_banner(msg), unsafe_allow_html=True)
+            phase_slot.markdown(_pc_loading_bar(msg), unsafe_allow_html=True)
 
-        # F-08-4: ux.html 4단계 — 프롬프트 분석 → 진단 → 개선안 → 완료
-        _set_phase("🔍 프롬프트 분석 중...")
+        _set_phase("🔍 맥락 충분성 분석 중...")
         context_profile = invoke_with_retry(
             context_r.invoke,
             base_input,
@@ -1354,7 +1399,7 @@ def _run_diagnosis(
         weighted = apply_goal_weights(diagnosis, improvement_goals)
         _loop_history: list[dict[str, Any]] = []
         if routing.self_improve_enabled:
-            _set_phase("✍️ 개선안 생성 중...")
+            _set_phase("✏️ 개선안 생성 중...")
             rewrite_openai_llm = build_openai_rewrite_llm(routing)
             rewrite_opus_llm = build_opus_llm(routing)
             _, _, rewrite_r_openai = build_chain_segments(rewrite_openai_llm)
@@ -1413,7 +1458,7 @@ def _run_diagnosis(
             diagnosis = best.get("diagnosis_raw") or diagnosis
         else:
             merged = {**merged, "diagnosis": diagnosis}
-            _set_phase("✍️ 개선안 생성 중...")
+            _set_phase("✏️ 개선안 생성 중...")
             rewrite = invoke_with_retry(
                 rewrite_r.invoke,
                 merged,
@@ -2045,6 +2090,8 @@ span[data-baseweb="tag"] {
             )
     sync_prompt_from_widget = True
 
+    _loading_slot = st.empty()  # 로딩 바 슬롯: pc_input_shell 카드 하단 외부
+
     if st.session_state.get("pc_manual_retry_diagnosis"):
         st.session_state.pc_manual_retry_diagnosis = False
         pending = st.session_state.get("pc_pending_diagnosis")
@@ -2056,6 +2103,7 @@ span[data-baseweb="tag"] {
                 list(pending["improvement_goals"]),
                 str(pending["text"]),
                 False,
+                phase_slot=_loading_slot,
             )
 
     # F-20: "진단 계속하기" 클릭 시 현재 위젯 값으로 진단 실행
@@ -2088,6 +2136,7 @@ span[data-baseweb="tag"] {
                 _gp_goals,
                 _gp_text,
                 bool(_gpending.get("auto_trigger", False)),
+                phase_slot=_loading_slot,
             )
         _skip_run_block = True
 
@@ -2138,16 +2187,15 @@ span[data-baseweb="tag"] {
             # F-20-1: 맥락 모호성 게이트 분석
             _routing = read_routing_config()
             _gate_llm = make_openai_llm(_routing.openai_diagnosis_model, _routing.temperature)
-            _gate_phase = st.empty()
-            _gate_phase.markdown(
-                _pc_phase_banner("🔍 맥락 충분성 분석 중..."), unsafe_allow_html=True
+            _loading_slot.markdown(
+                _pc_loading_bar("🔍 맥락 충분성 분석 중..."), unsafe_allow_html=True
             )
             try:
                 _gate_chain = build_gate_chain(_gate_llm)
                 _gate_score: dict[str, Any] = invoke_with_retry(
                     _gate_chain.invoke,
                     prep_gate_input(purpose_text, text, improvement_goals),
-                    on_retry=_make_retry_phase_cb(_gate_phase, "맥락 분석"),
+                    on_retry=_make_retry_phase_cb(_loading_slot, "맥락 분석"),
                 )
             except Exception:
                 _gate_score = {
@@ -2157,7 +2205,7 @@ span[data-baseweb="tag"] {
                     "weak_axes": [],
                 }
             finally:
-                _gate_phase.empty()
+                _loading_slot.empty()
 
             _gate_total = compute_gate_total_score(_gate_score)
             _gate_score["total_score"] = _gate_total
@@ -2180,13 +2228,13 @@ span[data-baseweb="tag"] {
                     improvement_goals,
                     text,
                     auto_trigger,
+                    phase_slot=_loading_slot,
                 )
             else:
                 # 게이트 경고: 질문 생성 후 배너+expander 표시
                 st.session_state.gate_result = _gate_score
-                _q_phase = st.empty()
-                _q_phase.markdown(
-                    _pc_phase_banner("💬 보완 질문 생성 중..."), unsafe_allow_html=True
+                _loading_slot.markdown(
+                    _pc_loading_bar("💬 보완 질문 생성 중..."), unsafe_allow_html=True
                 )
                 try:
                     _q_chain = build_question_chain(_gate_llm)
@@ -2197,12 +2245,12 @@ span[data-baseweb="tag"] {
                             text,
                             list(_gate_score.get("weak_axes") or []),
                         ),
-                        on_retry=_make_retry_phase_cb(_q_phase, "질문 생성"),
+                        on_retry=_make_retry_phase_cb(_loading_slot, "질문 생성"),
                     )
                 except Exception:
                     _gate_questions = {"questions": []}
                 finally:
-                    _q_phase.empty()
+                    _loading_slot.empty()
 
                 st.session_state.gate_questions = _gate_questions
                 st.session_state.gate_pending_diagnosis = {
