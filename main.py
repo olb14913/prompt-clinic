@@ -44,11 +44,11 @@ load_dotenv()
 OUTPUT_FORMAT_OPTIONS = ["텍스트", "리스트", "표", "코드", "JSON"]
 _OUTPUT_FORMAT_LEGACY = {"글": "텍스트"}
 IMPROVEMENT_OPTIONS = [
-    "토큰 줄이기",
-    "일관성 높이기",
-    "맥락 보완",
     "출력 품질 높이기",
+    "맥락 보완",
     "구조화",
+    "일관성 높이기",
+    "토큰 줄이기",
 ]
 
 CRITERION_LABELS = {
@@ -132,20 +132,27 @@ def _normalize_output_format_option(val: str) -> str:
 
 
 def _render_improvement_point_buttons() -> list[str]:
-    """와이어 태그 버튼 — 세션 키 improvement_goals_input 유지."""
+    """개선 포인트 버튼형 다중 선택: min 1 / max 3."""
     if "improvement_goals_input" not in st.session_state:
         st.session_state.improvement_goals_input = []
+
     sel: list[str] = list(st.session_state.improvement_goals_input)
+    max_selected = 3
+
     with st.container(key="pc_goal_pills"):
         gc = st.columns(5, gap="small")
+
         for i, opt in enumerate(IMPROVEMENT_OPTIONS):
             with gc[i]:
                 active = opt in sel
+                disabled = (not active) and (len(sel) >= max_selected)
+
                 if st.button(
                     opt,
                     key=f"pc_goal_btn_{i}",
                     type="primary" if active else "secondary",
                     use_container_width=True,
+                    disabled=disabled,
                 ):
                     if active:
                         st.session_state.improvement_goals_input = [
@@ -154,6 +161,7 @@ def _render_improvement_point_buttons() -> list[str]:
                     else:
                         st.session_state.improvement_goals_input = [*sel, opt]
                     st.rerun()
+
     return list(st.session_state.get("improvement_goals_input") or [])
 
 
@@ -456,6 +464,58 @@ section[data-testid="stSidebar"] {{
   font-size: 0.875rem;
   color: {UI_DOVE_GRAY};
 }}
+
+/* 맥락 수집 헤더 + 필수 안내 문구 */
+.pc-section-head-inline {{
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 0.45rem 0;
+  flex-wrap: wrap;
+}}
+
+.pc-section-head-inline .pc-wire-section {{
+  margin: 0;
+  font-size: 16px;
+  font-weight: 800;
+  color: #0b0b0b;
+}}
+
+.pc-section-required-text {{
+  font-size: 11px;
+  font-weight: 500;
+  color: #9a9a9a;
+  line-height: 1.2;
+}}
+
+.pc-label-row-single {{
+  margin-bottom: 0.35rem;
+}}
+
+.pc-input-counter-target {{
+  position: relative;
+}}
+
+.pc-input-counter {{
+  position: absolute;
+  right: 14px;
+  bottom: 10px;
+  font-size: 12px;
+  line-height: 1;
+  color: #6c6c6c;
+  background: rgba(255, 255, 255, 0.92);
+  padding: 0 2px;
+  z-index: 30;
+  pointer-events: none;
+}}
+
+.pc-input-counter-target input {{
+  padding-right: 56px !important;
+}}
+.st-key-prompt_name_field {{
+  margin-bottom: 0.8rem;
+}}
+
 .pc-char-right {{
   text-align: right;
   font-size: 11px;
@@ -516,6 +576,23 @@ section[data-testid="stSidebar"] {{
   color: #6c6c6c;
   margin: 0.2rem 0 0.5rem 0;
 }}
+.pc-policy-note {{
+  font-size: 11px;
+  color: #8a8a8a;
+  line-height: 1.6;
+  margin: 0.35rem 0 0.55rem 0;
+  white-space: nowrap;
+}}
+
+.pc-policy-note a {{
+  color: #7a7a7a;
+  font-weight: 700;
+  text-decoration: underline;
+}}
+
+.pc-policy-note a:hover {{
+  color: #5f5f5f;
+}}
 /* 개선 포인트: primary/secondary 동일 높이·작은 글자·한 줄 */
 .st-key-pc_goal_pills div[data-testid="stHorizontalBlock"] {{
   gap: 0.2rem !important;
@@ -533,15 +610,7 @@ section[data-testid="stSidebar"] {{
   gap: 0.45rem;
   margin: 0.35rem 0 0.6rem 0;
 }}
-.st-key-pc_input_shell div[data-testid="stButton"] button[kind="secondary"] {{
-  background-color: #ffffff !important;
-  border: 1px solid {UI_BORDER_ALTO} !important;
-  color: #374151 !important;
-  border-radius: 999px !important;
-  font-weight: 600 !important;
-  font-size: 13px !important;
-  min-height: 36px !important;
-}}
+
 .st-key-pc_input_shell [data-baseweb="input"] input,
 .st-key-pc_input_shell [data-baseweb="textarea"] textarea {{
   background-color: {UI_BEFORE_BG} !important;
@@ -556,6 +625,22 @@ section[data-testid="stSidebar"] {{
   border-radius: 6px !important;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05) !important;
 }}
+
+.st-key-output_format_field [data-baseweb="select"] span {{
+  color: #636363 !important;
+  font-size: 14px !important;
+  font-weight: 500 !important;
+}}
+
+.st-key-output_format_field [data-baseweb="select"] svg {{
+  color: #636363 !important;
+}}
+
+.pc-context-field-label {{
+  color: #636363 !important;
+  font-weight : 500 !important;
+}}
+
 /* 맥락 수집 2열: 라벨 줄 높이·컨트롤 상단선 수평 정렬 */
 .st-key-pc_context_row div[data-testid="stHorizontalBlock"] {{
   align-items: flex-start !important;
@@ -628,7 +713,56 @@ section[data-testid="stSidebar"] {{
   font-weight: 600 !important;
   min-height: 38px !important;
 }}
-/* 진단 시작 제외: 개선 포인트 pill만 전역 primary/secondary 규칙 덮어쓰기 */
+
+/* 진단 시작 버튼만 회색 직사각형으로 */
+.st-key-pc_run_diagnosis button[kind="secondary"] {{
+  background-color: #9e9e9e !important;
+  border: 1px solid #9e9e9e !important;
+  color: #ffffff !important;
+  border-radius: 8px !important;
+  font-weight: 600 !important;
+  min-height: 38px !important;
+  width: 100% !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 6px !important;
+}}
+
+/* 진단 시작 버튼 disabled 상태 */
+.st-key-pc_run_diagnosis button[kind="secondary"]:disabled {{
+  background-color: #9e9e9e !important;
+  border: 1px solid #9e9e9e !important;
+  color: #ffffff !important;
+  border-radius: 8px !important;
+  font-weight: 600 !important;
+  min-height: 38px !important;
+  width: 100% !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 6px !important;
+  opacity: 1 !important;
+  cursor: not-allowed !important;
+  -webkit-text-fill-color: #ffffff !important;
+}}
+
+/* 버튼 내부 텍스트/아이콘도 흰색 고정 */
+.st-key-pc_run_diagnosis button[kind="secondary"] * {{
+  color: #ffffff !important;
+  fill: #ffffff !important;
+  stroke: #ffffff !important;
+  -webkit-text-fill-color: #ffffff !important;
+}}
+
+.st-key-pc_run_diagnosis button[kind="secondary"]:disabled * {{
+  color: #ffffff !important;
+  fill: #ffffff !important;
+  stroke: #ffffff !important;
+  -webkit-text-fill-color: #ffffff !important;
+}}
+
+/* 진단 시작 제외: 개선 포인트 pill만 전용 스타일 */
 .st-key-pc_input_shell .st-key-pc_goal_pills div[data-testid="stButton"] button {{
   width: 100% !important;
   min-height: 34px !important;
@@ -641,6 +775,7 @@ section[data-testid="stSidebar"] {{
   border-radius: 999px !important;
   box-sizing: border-box !important;
 }}
+
 .st-key-pc_input_shell .st-key-pc_goal_pills div[data-testid="stButton"] button[kind="primary"] {{
   background-color: {UI_PRIMARY_BLUE} !important;
   border-color: {UI_PRIMARY_BLUE} !important;
@@ -651,11 +786,19 @@ section[data-testid="stSidebar"] {{
   border: 1px solid {UI_BORDER_ALTO} !important;
   color: #374151 !important;
 }}
+.st-key-pc_input_shell .st-key-pc_goal_pills div[data-testid="stButton"] button[kind="secondary"]:disabled {{
+  background-color: #ffffff !important;
+  border: 1px solid {UI_BORDER_ALTO} !important;
+  color: #374151 !important;
+  opacity: 1 !important;
+  cursor: not-allowed !important;
+  -webkit-text-fill-color: #374151 !important;
+}}
 .pc-bullet-blue {{
   color: {UI_PRIMARY_BLUE};
   font-weight: 700;
   margin-right: 0.25rem;
-}}
+}} 
 .pc-change-line {{
   margin: 0.35rem 0;
   line-height: 1.45;
@@ -746,13 +889,42 @@ div[data-testid="stHorizontalBlock"]:has([data-testid="stDownloadButton"])
   font-weight: 600;
   color: #fff;
 }}
-.pc-footer {{
+
+.pc-footer-wrap {{
   text-align: center;
-  color: {UI_DOVE_GRAY};
-  font-size: 0.85rem;
   margin-top: 2rem;
   padding-top: 1rem;
 }}
+
+.pc-footer-links {{
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  color: {UI_DOVE_GRAY};
+  margin-bottom: 6px;
+}}
+
+.pc-footer-links a {{
+  color: {UI_DOVE_GRAY};
+  text-decoration: underline;
+}}
+
+.pc-footer-links a:hover {{
+  color: #4b4b4b;
+}}
+
+.pc-footer-divider {{
+  color: #9a9a9a;
+}}
+
+.pc-footer-copy {{
+  color: {UI_DOVE_GRAY};
+  font-size: 0.85rem;
+}}
+
 .block-container {{
   max-width: 819px !important;
   margin-left: auto !important;
@@ -1075,6 +1247,8 @@ def init_session() -> None:
         st.session_state.lc_chat_history = InMemoryChatMessageHistory()
     if "notion_save_status" not in st.session_state:
         st.session_state.notion_save_status = None  # None | "success" | "error"
+    if "notion_save_error" not in st.session_state:
+        st.session_state.notion_save_error = None    
     if "rediagnose_context" not in st.session_state:
         st.session_state.rediagnose_context = None
     if "rediagnose_prefill_pending" not in st.session_state:
@@ -1268,6 +1442,21 @@ def _run_diagnosis(
             "drift_score": _drift_score,
             "loop_history": _loop_history,
         }
+        
+        notion_ready = bool(
+            os.environ.get("NOTION_API_KEY") and os.environ.get("NOTION_DB_ID")
+        )
+        st.session_state.notion_save_status = None
+        st.session_state.notion_save_error = None
+
+        if notion_ready:
+            try:
+                _save_to_notion_with_retry(st.session_state.last_snapshot)
+                st.session_state.notion_save_status = "success"
+            except Exception as e:
+                st.session_state.notion_save_status = "error"
+                st.session_state.notion_save_error = f"{type(e).__name__}: {e}"
+       
         sync_learning_data(st.session_state.last_snapshot)
         st.session_state.history.append(st.session_state.last_snapshot)
         st.session_state.lc_chat_history.add_user_message(text[:300])
@@ -1380,54 +1569,17 @@ def _render_results_panel(snap: dict[str, Any]) -> bool:
         improved,
         changes,
     )
-
-    notion_ready = bool(
-        os.environ.get("NOTION_API_KEY") and os.environ.get("NOTION_DB_ID")
+    
+    st.download_button(
+        "⬇️ 리포트 다운로드 (.md)",
+        data=md_body,
+        file_name=fn,
+        mime="text/markdown",
+        type="primary",
+        use_container_width=True,
+        key="download_report_md",
     )
-    dl_col, notion_col = st.columns(2)
-    with dl_col:
-        st.download_button(
-            "⬇️ 리포트 다운로드 (.md)",
-            data=md_body,
-            file_name=fn,
-            mime="text/markdown",
-            type="primary",
-            use_container_width=True,
-            key="download_report_md",
-        )
-    with notion_col:
-        if notion_ready:
-            if st.button(
-                "🗂️ 프롬프트 아카이빙 (Notion)",
-                type="primary",
-                key="notion_save",
-                use_container_width=True,
-            ):
-                try:
-                    _save_to_notion_with_retry(snap)
-                    st.session_state.notion_save_status = "success"
-                    st.toast("✅ Notion에 자동 저장됐어요!")
-                except Exception:
-                    st.session_state.notion_save_status = "error"
-                    st.toast("😢 Notion 저장에 실패했어요. 리포트를 다운로드해 보관하세요.")
-        else:
-            st.button(
-                "🗂️ 프롬프트 아카이빙 (Notion)",
-                type="primary",
-                disabled=True,
-                use_container_width=True,
-                key="notion_save_disabled",
-                help=(
-                    "NOTION_API_KEY와 NOTION_DB_ID를 .env에 설정하면 "
-                    "사용할 수 있어요."
-                ),
-            )
 
-    if st.session_state.get("notion_save_status") == "error":
-        st.caption(
-            "Notion 저장에 실패했을 때는 위 **리포트 다운로드**로 "
-            "동일 내용을 저장할 수 있어요."
-        )
     return sync
 
 
@@ -1663,25 +1815,85 @@ span[data-baseweb="tag"] {
 
     with st.container(border=True, key="pc_input_shell"):
         st.markdown(
-            '<span class="pc-wire-label-strong">프롬프트명</span>'
-            '<span class="pc-wire-muted"> (20자 이하, 추후 프롬프트 다운로드 및 '
-            "저장 시, 파일명으로 사용됩니다.)</span>",
+            """
+            <div class="pc-section-head-inline">
+                <span class="pc-wire-section">맥락 수집</span>
+                <span class="pc-section-required-text">모든 항목은 필수입력값입니다.</span>
+            </div>
+            """,
             unsafe_allow_html=True,
-        )
-        prompt_name = st.text_input(
-            "프롬프트명",
-            placeholder="예 : AI챗봇",
-            key="prompt_name_input",
-            label_visibility="collapsed",
-            max_chars=20,       
         )
 
-        st.markdown(
-            '<p class="pc-wire-section">맥락 수집</p>',
-            unsafe_allow_html=True,
+        with st.container(key="prompt_name_field"):
+            st.markdown(
+                """
+                <div class="pc-label-row pc-label-row-single">
+                    <span class="pc-wire-muted pc-context-field-label">프롬프트 명 (20자 이하)</span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            prompt_name = st.text_input(
+                "프롬프트명",
+                placeholder="예 : AI 챗봇",
+                key="prompt_name_input",
+                label_visibility="collapsed",
+                max_chars=20,
+            )
+
+        components.html(
+            """
+            <script>
+            (function() {
+            const doc = window.parent.document;
+    
+            function mountPromptNameCounter() {
+                const wrapper = doc.querySelector('.st-key-prompt_name_field');
+                if (!wrapper) return false;
+    
+                const inputShell = wrapper.querySelector('[data-testid="stTextInput"]');
+                if (!inputShell) return false;
+    
+                const input = inputShell.querySelector('input');
+                if (!input) return false;
+    
+                inputShell.classList.add('pc-input-counter-target');
+    
+                let counter = inputShell.querySelector('.pc-input-counter');
+                if (!counter) {
+                counter = doc.createElement('div');
+                counter.className = 'pc-input-counter';
+                inputShell.appendChild(counter);
+                }
+    
+                function renderCount() {
+                counter.textContent = `${input.value.length} / 20`;
+                }
+    
+                if (!input.dataset.pcPromptCounterBound) {
+                input.addEventListener('input', renderCount);
+                input.dataset.pcPromptCounterBound = '1';
+                }
+    
+                renderCount();
+                return true;
+            }
+    
+            let tries = 0;
+            const timer = setInterval(() => {
+                const ok = mountPromptNameCounter();
+                tries += 1;
+                if (ok || tries > 40) clearInterval(timer);
+            }, 150);
+            })();
+            </script>
+            """,
+            height=0,
         )
+
         with st.container(key="pc_context_row"):
             col_purpose, col_fmt = st.columns([1.85, 1], vertical_alignment="top")
+
             with col_purpose:
                 st.markdown(
                     '<span class="pc-wire-muted pc-context-field-label">'
@@ -1691,20 +1903,21 @@ span[data-baseweb="tag"] {
                 with st.container(key="purpose_field"):
                     purpose = st.text_area(
                         "프롬프트 사용목적",
-                        placeholder="예 : 앱을 위한 기획서 작성",
+                        placeholder="예 : AI 챗봇 생성을 위한 프롬프트 작성",
                         key="purpose_input",
                         label_visibility="collapsed",
                         height=44,
                         max_chars=100,
                     )
-                    
+
                 inject_live_counter(container_key="purpose_field", limit=100)
-               
+
                 if len((purpose or "")) > 100:
                     st.markdown(
                         '<p class="pc-inline-err">100자 이하로 입력해주세요.</p>',
                         unsafe_allow_html=True,
                     )
+
             with col_fmt:
                 st.markdown(
                     '<span class="pc-wire-label-strong pc-context-field-label">'
@@ -1722,19 +1935,25 @@ span[data-baseweb="tag"] {
         goals_err = len(st.session_state.get("improvement_goals_input") or []) == 0
         st.markdown(
             '<div class="pc-label-row">'
-            '<span class="pc-wire-muted" style="margin:0;">개선 포인트 (1개 이상 선택)</span>'
-            + (
-                '<span class="pc-inline-err">1개 이상 선택해주세요.</span>'
-                if goals_err
-                else ""
-            )
-            + "</div>",
+            '<span class="pc-wire-muted" style="margin:0;">개선 포인트 (최대 3개 선택 가능)</span>'
+            "</div>",
             unsafe_allow_html=True,
         )
         improvement_goals = _render_improvement_point_buttons()
 
         _up_prev = str(st.session_state.get("user_prompt_input") or "")
         _prompt_len_err_label = len(_up_prev) > 500
+
+
+        _service_url = os.environ.get(
+            "SERVICE_POLICY_URL",
+            "https://www.notion.so/Prompt-Clinic-34340cb3731d80edb1cbefcf197078d7",
+        )
+        _privacy_url = os.environ.get(
+            "PRIVACY_POLICY_URL",
+            "https://www.notion.so/Prompt-Clinic-34340cb3731d80eeb2d8cad538a3fe67",
+        )
+
         with st.container(key="user_prompt_field"):
             st.markdown(
                 '<div class="pc-label-row">'
@@ -1751,23 +1970,29 @@ span[data-baseweb="tag"] {
             user_prompt = st.text_area(
                 "진단할 프롬프트",
                 height=220,
-                placeholder="예 : 앱을 위한 기획서 작성해줘",
+                placeholder="예 : 너는 AI 챗봇이야. 사용자 질문에 잘 대답해줘. 친절하게 해줘.",
                 key="user_prompt_input",
                 label_visibility="collapsed",
                 max_chars=500,
             )
-        
-        inject_live_counter(container_key="user_prompt_field", limit=500)
-            
-        st.markdown(
-                f'<div class="pc-char-user-prompt">'
-                f"{len((user_prompt or ''))} / 500</div>",
+            st.markdown(
+                f"""
+                <div class="pc-policy-note">
+                    <a href="{_service_url}" target="_blank" rel="noopener noreferrer">서비스이용정책</a>
+                    및
+                    <a href="{_privacy_url}" target="_blank" rel="noopener noreferrer">개인정보처리방침</a>
+                    에 따라 입력하신 프롬프트는 서비스 품질 개선을 위한 학습 데이터로 활용될 수 있습니다.
+                </div>
+                """,
                 unsafe_allow_html=True,
-        )
+            )
+
+        inject_live_counter(container_key="user_prompt_field", limit=500)
 
         p_len = len((purpose or ""))
         t_len = len((user_prompt or ""))
         pn = (prompt_name or "").strip()
+
         purpose_ok = bool((purpose or "").strip()) and p_len <= 100
         name_ok = (
             bool(pn)
@@ -1783,47 +2008,33 @@ span[data-baseweb="tag"] {
         err_prompt_border = t_len > 500
         st.markdown(
             f"""
-<style>
-.st-key-purpose_field div[data-baseweb="input"] input,
-.st-key-purpose_field div[data-baseweb="textarea"] textarea {{
-  border-color: {'#d40924' if err_purpose_border else '#DEDEDE'} !important;
-}}
-.st-key-user_prompt_field div[data-baseweb="textarea"] textarea {{
-  border-color: {'#d40924' if err_prompt_border else '#DEDEDE'} !important;
-}}
-</style>
-""",
+    <style>
+    .st-key-purpose_field div[data-baseweb="input"] input,
+    .st-key-purpose_field div[data-baseweb="textarea"] textarea {{
+    border-color: {'#d40924' if err_purpose_border else '#DEDEDE'} !important;
+    }}
+    .st-key-user_prompt_field div[data-baseweb="textarea"] textarea {{
+    border-color: {'#d40924' if err_prompt_border else '#DEDEDE'} !important;
+    }}
+    </style>
+    """,
             unsafe_allow_html=True,
         )
 
-        _sp, run_col = st.columns([3.5, 1])
-        with _sp:
-            _privacy_url = os.environ.get(
-                "PRIVACY_POLICY_URL",
-                "https://www.notion.so/Prompt-Clinic-34340cb3731d80eeb2d8cad538a3fe67",
-            )
-            _service_url = os.environ.get(
-                "SERVICE_POLICY_URL",
-                "https://www.notion.so/Prompt-Clinic-34340cb3731d80edb1cbefcf197078d7",
-            )
-            st.markdown(
-                f'<p style="font-size:11px;color:#6c6c6c;line-height:1.6;margin:0.45rem 0 0 0;">'
-                f"진단 결과는 서비스 개선을 위한 학습 데이터로 활용될 수 있습니다.<br>"
-                f'<a href="{_service_url}" target="_blank" rel="noopener noreferrer" '
-                f'style="color:{UI_PRIMARY_BLUE};text-decoration:none;">서비스 이용정책 →</a>'
-                f'&nbsp;&nbsp;'
-                f'<a href="{_privacy_url}" target="_blank" rel="noopener noreferrer" '
-                f'style="color:{UI_PRIMARY_BLUE};text-decoration:none;">개인정보처리방침 →</a>'
-                f"</p>",
-                unsafe_allow_html=True,
-            )
+        _left_spacer, run_col = st.columns([4.2, 1])
+
+        with _left_spacer:
+            st.empty()
+
         with run_col:
+            is_enabled = form_ready or auto_trigger
+
             run = st.button(
-                "진단 시작",
-                type="primary",
+                "🩺 진단 시작",
+                type="primary" if is_enabled else "secondary",
                 use_container_width=True,
                 key="pc_run_diagnosis",
-                disabled=not form_ready and not auto_trigger,
+                disabled=not is_enabled,
             )
     sync_prompt_from_widget = True
 
@@ -2045,10 +2256,29 @@ span[data-baseweb="tag"] {
         height=0,
     )
 
+    _privacy_url = os.environ.get(
+        "PRIVACY_POLICY_URL",
+        "https://www.notion.so/Prompt-Clinic-34340cb3731d80eeb2d8cad538a3fe67",
+    )
+    _service_url = os.environ.get(
+        "SERVICE_POLICY_URL",
+        "https://www.notion.so/Prompt-Clinic-34340cb3731d80edb1cbefcf197078d7",
+    )
+
     st.markdown(
-        '<p class="pc-footer">© 2026 Team 토큰부족. All rights reserved.</p>',
+        f"""
+        <div class="pc-footer-wrap">
+            <div class="pc-footer-links">
+                <a href="{_service_url}" target="_blank" rel="noopener noreferrer">서비스이용정책</a>
+                <span class="pc-footer-divider">|</span>
+                <a href="{_privacy_url}" target="_blank" rel="noopener noreferrer">개인정보처리방침</a>
+            </div>
+            <div class="pc-footer-copy">© 2026 Team 토큰부족. All rights reserved.</div>
+        </div>
+        """,
         unsafe_allow_html=True,
     )
+
 
     if sync_prompt_from_widget:
         st.session_state.rediagnose_prompt = user_prompt
