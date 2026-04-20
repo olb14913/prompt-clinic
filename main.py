@@ -642,10 +642,10 @@ section[data-testid="stSidebar"] {{
 }}
 
 /* 맥락 수집 2열: 라벨 줄 높이·컨트롤 상단선 수평 정렬 */
-.st-key-pc_context_row div[data-testid="stHorizontalBlock"] {{
+.st-key-pc_name_format_row div[data-testid="stHorizontalBlock"] {{
   align-items: flex-start !important;
 }}
-.st-key-pc_context_row .pc-context-field-label {{
+.st-key-pc_name_format_row .pc-context-field-label {{
   display: block;
   min-height: 24px;
   margin-bottom: 6px;
@@ -684,15 +684,15 @@ section[data-testid="stSidebar"] {{
   height: 0 !important;
 }}
 .st-key-output_format_field [data-baseweb="select"] {{
-  min-height: 44px !important;
-  height: 44px !important;
-  max-height: 44px !important;
+  min-height: 38px !important;
+  height: 38px !important;
+  max-height: 38px !important;
   box-sizing: border-box !important;
 }}
 .st-key-output_format_field [data-baseweb="select"] > div {{
-  min-height: 44px !important;
-  height: 44px !important;
-  max-height: 44px !important;
+  min-height: 38px !important;
+  height: 38px !important;
+  max-height: 38px !important;
   box-sizing: border-box !important;
   display: flex !important;
   align-items: center !important;
@@ -1824,99 +1824,75 @@ span[data-baseweb="tag"] {
             unsafe_allow_html=True,
         )
 
-        with st.container(key="prompt_name_field"):
-            st.markdown(
-                """
-                <div class="pc-label-row pc-label-row-single">
-                    <span class="pc-wire-muted pc-context-field-label">프롬프트 명 (20자 이하)</span>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-            prompt_name = st.text_input(
-                "프롬프트명",
-                placeholder="예 : AI 챗봇",
-                key="prompt_name_input",
-                label_visibility="collapsed",
-                max_chars=20,
-            )
+        with st.container(key="pc_name_format_row"):
+            col_name, col_fmt = st.columns([1.85, 1], vertical_alignment="top")
 
-        components.html(
-            """
-            <script>
-            (function() {
-            const doc = window.parent.document;
-    
-            function mountPromptNameCounter() {
-                const wrapper = doc.querySelector('.st-key-prompt_name_field');
-                if (!wrapper) return false;
-    
-                const inputShell = wrapper.querySelector('[data-testid="stTextInput"]');
-                if (!inputShell) return false;
-    
-                const input = inputShell.querySelector('input');
-                if (!input) return false;
-    
-                inputShell.classList.add('pc-input-counter-target');
-    
-                let counter = inputShell.querySelector('.pc-input-counter');
-                if (!counter) {
-                counter = doc.createElement('div');
-                counter.className = 'pc-input-counter';
-                inputShell.appendChild(counter);
-                }
-    
-                function renderCount() {
-                counter.textContent = `${input.value.length} / 20`;
-                }
-    
-                if (!input.dataset.pcPromptCounterBound) {
-                input.addEventListener('input', renderCount);
-                input.dataset.pcPromptCounterBound = '1';
-                }
-    
-                renderCount();
-                return true;
-            }
-    
-            let tries = 0;
-            const timer = setInterval(() => {
-                const ok = mountPromptNameCounter();
-                tries += 1;
-                if (ok || tries > 40) clearInterval(timer);
-            }, 150);
-            })();
-            </script>
-            """,
-            height=0,
-        )
-
-        with st.container(key="pc_context_row"):
-            col_purpose, col_fmt = st.columns([1.85, 1], vertical_alignment="top")
-
-            with col_purpose:
+            with col_name:
                 st.markdown(
-                    '<span class="pc-wire-muted pc-context-field-label">'
-                    "프롬프트 사용목적 (100자 이하)</span>",
+                    """
+                    <div class="pc-label-row pc-label-row-single">
+                        <span class="pc-wire-muted pc-context-field-label">프롬프트 명 (20자 이하)</span>
+                    </div>
+                    """,
                     unsafe_allow_html=True,
                 )
-                with st.container(key="purpose_field"):
-                    purpose = st.text_area(
-                        "프롬프트 사용목적",
-                        placeholder="예 : AI 챗봇 생성을 위한 프롬프트 작성",
-                        key="purpose_input",
+                with st.container(key="prompt_name_field"):
+                    prompt_name = st.text_input(
+                        "프롬프트명",
+                        placeholder="예 : AI 챗봇",
+                        key="prompt_name_input",
                         label_visibility="collapsed",
-                        height=44,
-                        max_chars=100,
                     )
 
-                inject_live_counter(container_key="purpose_field", limit=100)
+                components.html(
+                    """
+                    <script>
+                    (function() {
+                    const doc = window.parent.document;
 
-                if len((purpose or "")) > 100:
-                    st.markdown(
-                        '<p class="pc-inline-err">100자 이하로 입력해주세요.</p>',
-                        unsafe_allow_html=True,
-                    )
+                    function mountPromptNameCounter() {
+                        const wrapper = doc.querySelector('.st-key-prompt_name_field');
+                        if (!wrapper) return false;
+
+                        const inputShell = wrapper.querySelector('[data-testid="stTextInput"]');
+                        if (!inputShell) return false;
+
+                        const input = inputShell.querySelector('input');
+                        if (!input) return false;
+
+                        inputShell.classList.add('pc-input-counter-target');
+
+                        let counter = inputShell.querySelector('.pc-input-counter');
+                        if (!counter) {
+                        counter = doc.createElement('div');
+                        counter.className = 'pc-input-counter';
+                        inputShell.appendChild(counter);
+                        }
+
+                        function renderCount() {
+                        counter.textContent = `${input.value.length} / 20`;
+                        }
+
+                        if (!input.dataset.pcPromptCounterBound) {
+                        input.addEventListener('input', renderCount);
+                        input.dataset.pcPromptCounterBound = '1';
+                        }
+
+                        renderCount();
+                        return true;
+                    }
+
+                    let tries = 0;
+                    const timer = setInterval(() => {
+                        const ok = mountPromptNameCounter();
+                        tries += 1;
+                        if (ok || tries > 40) clearInterval(timer);
+                    }, 150);
+                    })();
+                    </script>
+                    """,
+                    height=0,
+                )
 
             with col_fmt:
                 st.markdown(
@@ -1931,6 +1907,28 @@ span[data-baseweb="tag"] {
                         key="output_format_input",
                         label_visibility="collapsed",
                     )
+
+        st.markdown(
+            '<span class="pc-wire-muted pc-context-field-label">'
+            "프롬프트 사용목적 (100자 이하)</span>",
+            unsafe_allow_html=True,
+        )
+        with st.container(key="purpose_field"):
+            purpose = st.text_area(
+                "프롬프트 사용목적",
+                placeholder="예 : AI 챗봇 생성을 위한 프롬프트 작성",
+                key="purpose_input",
+                label_visibility="collapsed",
+                height=44,
+            )
+
+        inject_live_counter(container_key="purpose_field", limit=100)
+
+        if len((purpose or "")) > 100:
+            st.markdown(
+                '<p class="pc-inline-err">100자 이하로 입력해주세요.</p>',
+                unsafe_allow_html=True,
+            )
 
         goals_err = len(st.session_state.get("improvement_goals_input") or []) == 0
         st.markdown(
@@ -1973,7 +1971,6 @@ span[data-baseweb="tag"] {
                 placeholder="예 : 너는 AI 챗봇이야. 사용자 질문에 잘 대답해줘. 친절하게 해줘.",
                 key="user_prompt_input",
                 label_visibility="collapsed",
-                max_chars=500,
             )
             st.markdown(
                 f"""
