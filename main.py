@@ -650,6 +650,8 @@ section[data-testid="stSidebar"] {{
   min-height: 24px;
   margin-bottom: 6px;
   line-height: 1.35;
+  font-size: 16px !important;
+  font-weight: 700 !important;
 }}
 /* 맥락 수집: 위젯 래퍼 패딩 통일(높이 어긋남 방지) */
 .st-key-purpose_field [data-testid="element-container"],
@@ -1229,9 +1231,17 @@ def _render_gate_ui() -> None:
                 f"• {html.escape(q)}</p>",
                 unsafe_allow_html=True,
             )
-        if st.button("진단 계속하기", key="pc_gate_proceed", type="primary"):
+        def _on_gate_proceed_click() -> None:
             st.session_state.gate_should_proceed = True
-            st.rerun()
+            st.session_state.gate_result = None
+            st.session_state.gate_questions = None
+
+        st.button(
+            "진단 계속하기",
+            key="pc_gate_proceed",
+            type="primary",
+            on_click=_on_gate_proceed_click,
+        )
 
 
 def init_session() -> None:
@@ -2049,18 +2059,20 @@ span[data-baseweb="tag"] {
             )
 
     # F-20: "진단 계속하기" 클릭 시 현재 위젯 값으로 진단 실행
+    _skip_run_block = False
     if st.session_state.get("gate_should_proceed"):
         st.session_state.gate_should_proceed = False
         _gpending = st.session_state.get("gate_pending_diagnosis")
+        # gate_result/questions는 _gpending 존재 여부와 무관하게 항상 클리어
+        st.session_state.gate_result = None
+        st.session_state.gate_questions = None
+        st.session_state.gate_pending_diagnosis = None
         if _gpending:
             _gp_purpose = str(st.session_state.get("purpose_input") or _gpending["purpose"])
             _gp_text = str(st.session_state.get("user_prompt_input") or _gpending["text"])
             _gp_goals = list(
                 st.session_state.get("improvement_goals_input") or _gpending["improvement_goals"]
             )
-            st.session_state.gate_result = None
-            st.session_state.gate_questions = None
-            st.session_state.gate_pending_diagnosis = None
             st.session_state["pc_pending_diagnosis"] = {
                 "prompt_name": _gpending["prompt_name"],
                 "purpose": _gp_purpose,
@@ -2077,8 +2089,9 @@ span[data-baseweb="tag"] {
                 _gp_text,
                 bool(_gpending.get("auto_trigger", False)),
             )
+        _skip_run_block = True
 
-    if run or auto_trigger:
+    if (run or auto_trigger) and not _skip_run_block:
         text = (user_prompt or "").strip()
         prompt_name_text = (prompt_name or "").strip()
         purpose_text = (purpose or "").strip()
