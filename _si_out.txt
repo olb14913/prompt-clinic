@@ -1,0 +1,28 @@
+82:     weighted_scores = {
+86:     total = sum(weighted_scores.values())
+94:         "weighted_scores": weighted_scores,
+97:         "total_score": total,
+118:         int((r.get("weighted") or {}).get("total_score") or 0) for r in history
+158:     1. total_score 내림차순 (높을수록 우선)
+166:             int((r.get("weighted") or {}).get("total_score") or 0),
+180:     on_iteration: Callable[[int, int, str], None] | None,
+196:         if on_iteration is not None:
+197:             on_iteration(iter_no, _PHASE1_MAX_ITERS, "진단")
+199:         weighted = apply_goal_weights(
+202:         score = int(weighted.get("total_score") or 0)
+204:         if on_iteration is not None:
+205:             on_iteration(iter_no, _PHASE1_MAX_ITERS, f"개선안 생성 ({label_openai})")
+216:             "weighted": weighted,
+245:     on_iteration: Callable[[int, int, str], None] | None,
+266:     if on_iteration is not None:
+267:         on_iteration(iter_val, total_p2, f"Opus 교차 검증 ({label_opus})")
+286:     weighted_val = apply_goal_weights(
+289:     opus_score = int(weighted_val.get("total_score") or 0)
+296:         "weighted": weighted_val,
+330:         if on_iteration is not None:
+335:             on_iteration(iter_extra, total_p2, label)
+356:             "weighted": w_extra,
+370: def run_self_improve_loop(
+380:     on_iteration: Callable[[int, int, str], None] | None = None,
+390:         on_iteration=on_iteration,
+403:             on_iteration=on_iteration,

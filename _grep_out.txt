@@ -1,0 +1,11 @@
+38: from chains.self_improve_chain import apply_goal_weights, run_self_improve_loop
+1401:         if routing.self_improve_enabled:
+1411:             _loop_iter_step = [0]
+1412:             _LOOP_STEP_LABELS = ["맥락 분석 중", "목표 확인 완료", "제약사항 검토 중"]
+1414:             def _on_loop_iteration(iter_no: int, max_iters: int, phase: str) -> None:
+1415:                 s = min(_loop_iter_step[0], 2)
+1417:                 for i, step in enumerate(_LOOP_STEP_LABELS):
+1439:                 _loop_iter_step[0] += 1
+1442:                 run_self_improve_loop,
+1449:                 max_iters=routing.self_improve_max_iterations,
+1451:                 on_iteration=_on_loop_iteration,
