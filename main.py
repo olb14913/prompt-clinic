@@ -250,6 +250,102 @@ def build_markdown_report(
     return "\n".join(lines)
 
 
+def _find_korean_font() -> str | None:
+    candidates = [
+        Path(__file__).parent / "data" / "fonts" / "NanumGothic.ttf",
+    ]
+    for p in candidates:
+        if p.exists():
+            return str(p)
+    return None
+
+
+def build_pdf_report(
+    prompt_name: str,
+    purpose: str,
+    output_format: str,
+    goals: list[str],
+    user_prompt: str,
+    weighted: dict[str, Any],
+    improved: str,
+    changes: list[dict[str, Any]],
+) -> bytes:
+    """Generate a Korean-friendly PDF report via fpdf2."""
+    try:
+        from fpdf import FPDF
+    except ImportError:
+        raise RuntimeError("fpdf2 not installed. Run: pip install fpdf2")
+
+    font_path = _find_korean_font()
+
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+
+    if font_path:
+        pdf.add_font("NanumGothic", "", font_path, uni=True)
+
+    def _h(size: int, bold: bool = False) -> None:
+        if font_path:
+            pdf.set_font("NanumGothic", size=size)
+        else:
+            style = "B" if bold else ""
+            pdf.set_font("Helvetica", style=style, size=size)
+
+    def _cell(txt: str, size: int = 11, bold: bool = False, ln: bool = True) -> None:
+        _h(size, bold)
+        pdf.multi_cell(0, 7, txt)
+        if ln:
+            pdf.ln(1)
+
+    _cell("Prompt Clinic \uc9c4\ub2e8 \ub9ac\ud3ec\ud2b8", size=18, bold=True)
+    _cell(f"\uc0dd\uc131 \uc2dc\uac01: {datetime.now().isoformat(timespec='seconds')}", size=9)
+    pdf.ln(4)
+
+    _cell("[\ub9e5\ub77d]", size=13, bold=True)
+    _cell(f"\u2022 \ud504\ub86c\ud504\ud2b8 \uba85: {prompt_name}")
+    _cell(f"\u2022 \ubaa9\uc801: {purpose or '(\uc5c6\uc74c)'}")
+    _cell(f"\u2022 \ucd9c\ub825 \ud615\uc2dd: {output_format}")
+    _cell(f"\u2022 \uac1c\uc120 \ubaa9\uc801: {', '.join(goals) if goals else '(\uc5c6\uc74c)'}")
+    pdf.ln(3)
+
+    _cell("[\uc9c4\ub2e8 (\uac00\uc911\uce58 \ubc18\uc601)]", size=13, bold=True)
+    _cell(f"\u2022 \uc885\ud569 \uc810\uc218: {weighted['total_score']} / 100")
+    _cell(f"\u2022 \ub4f1\uae09: {weighted['grade_badge']} {weighted['grade']}")
+    pdf.ln(2)
+    for key, label in CRITERION_LABELS.items():
+        sc = weighted["weighted_scores"][key]
+        reason = weighted["reasons"].get(key, "")
+        _cell(f"\u2022 {label}: {sc} / 25")
+        if reason:
+            _cell(f"  \uc6d0\uc778: {reason}", size=9)
+    pdf.ln(3)
+
+    _cell("[Before]", size=13, bold=True)
+    _h(9)
+    pdf.set_fill_color(245, 245, 245)
+    pdf.multi_cell(0, 6, user_prompt, fill=True)
+    pdf.ln(3)
+
+    _cell("[After]", size=13, bold=True)
+    _h(9)
+    pdf.multi_cell(0, 6, improved, fill=True)
+    pdf.ln(3)
+
+    _cell("[\ubcc0\uacbd \uc774\uc720]", size=13, bold=True)
+    for ch in changes:
+        crit = ch.get("criterion", "")
+        bf = ch.get("before", "")
+        af = ch.get("after", "")
+        rs = ch.get("reason", "")
+        _cell(f"\u2022 {crit}: {bf} \u2192 {af}")
+        if rs:
+            _cell(f"  {rs}", size=9)
+    pdf.ln(2)
+
+    return bytes(pdf.output())
+
+
 def dynamic_text_area_height(text: str, min_px: int = 150, max_px: int = 400) -> int:
     t = text or ""
     line_count = max(1, t.count("\n") + 1)
@@ -800,7 +896,7 @@ section[data-testid="stSidebar"] {{
   color: {UI_PRIMARY_BLUE};
   font-weight: 700;
   margin-right: 0.25rem;
-}} 
+}}
 .pc-change-line {{
   margin: 0.35rem 0;
   line-height: 1.45;
@@ -1303,7 +1399,7 @@ def init_session() -> None:
     if "notion_save_status" not in st.session_state:
         st.session_state.notion_save_status = None  # None | "success" | "error"
     if "notion_save_error" not in st.session_state:
-        st.session_state.notion_save_error = None    
+        st.session_state.notion_save_error = None
     if "rediagnose_context" not in st.session_state:
         st.session_state.rediagnose_context = None
     if "rediagnose_prefill_pending" not in st.session_state:
@@ -1492,7 +1588,7 @@ def _run_diagnosis(
             "drift_score": _drift_score,
             "loop_history": _loop_history,
         }
-        
+
         notion_ready = bool(
             os.environ.get("NOTION_API_KEY") and os.environ.get("NOTION_DB_ID")
         )
@@ -1506,7 +1602,7 @@ def _run_diagnosis(
             except Exception as e:
                 st.session_state.notion_save_status = "error"
                 st.session_state.notion_save_error = f"{type(e).__name__}: {e}"
-       
+
         sync_learning_data(st.session_state.last_snapshot)
         st.session_state.history.append(st.session_state.last_snapshot)
         st.session_state.lc_chat_history.add_user_message(text[:300])
@@ -1619,16 +1715,39 @@ def _render_results_panel(snap: dict[str, Any]) -> bool:
         improved,
         changes,
     )
-    
-    st.download_button(
-        "⬇️ 리포트 다운로드 (.md)",
-        data=md_body,
-        file_name=fn,
-        mime="text/markdown",
-        type="primary",
-        use_container_width=True,
-        key="download_report_md",
-    )
+
+    fn_pdf = f"{prompt_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+    try:
+        pdf_bytes = build_pdf_report(
+            prompt_name,
+            snap["purpose"],
+            snap["output_format"],
+            snap["improvement_goals"],
+            original,
+            weighted,
+            improved,
+            changes,
+        )
+        st.download_button(
+            "⬇️ 리포트 다운로드 (.pdf)",
+            data=pdf_bytes,
+            file_name=fn_pdf,
+            mime="application/pdf",
+            type="primary",
+            use_container_width=True,
+            key="download_report_pdf",
+        )
+    except Exception as _pdf_err:
+        st.warning(f"PDF 생성 실패: {_pdf_err}")
+        st.download_button(
+            "⬇️ 리포트 다운로드 (.md)",
+            data=md_body,
+            file_name=fn,
+            mime="text/markdown",
+            type="primary",
+            use_container_width=True,
+            key="download_report_md_fallback",
+        )
 
     return sync
 
