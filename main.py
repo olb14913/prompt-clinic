@@ -1407,36 +1407,31 @@ def _run_diagnosis(
             if rewrite_opus_llm is not None:
                 _, _, rewrite_r_opus = build_chain_segments(rewrite_opus_llm)
 
-            # F-20-4: 프로세스 상태 인디케이터 (수치 노출 없음)
-            _loop_iter_step = [0]
-            _LOOP_STEP_LABELS = ["맥락 분석 중", "목표 확인 완료", "제약사항 검토 중"]
+            _LOOP_MESSAGES = [
+                "더 나은 프롬프트를 만들고 있습니다",
+                "개선 방향을 다듬고 있습니다",
+                "최적의 구조를 찾고 있습니다",
+                "고성능 모델로 검증하고 있습니다",
+                "결과를 검토하고 있습니다",
+                "최종 결과를 선택하고 있습니다",
+            ]
+            _initial_score = int(weighted.get("total_score") or 0)
+            _prev_score = [_initial_score]
+            _curr_score = [_initial_score]
 
-            def _on_loop_iteration(iter_no: int, max_iters: int, phase: str) -> None:
-                s = min(_loop_iter_step[0], 2)
-                parts = []
-                for i, step in enumerate(_LOOP_STEP_LABELS):
-                    if i < s:
-                        parts.append(
-                            f'<span style="color:#9ca3af;">{html.escape(step)}</span>'
-                        )
-                    elif i == s:
-                        parts.append(
-                            f'<span style="color:#285aff;font-weight:600;">{html.escape(step)}</span>'
-                        )
-                    else:
-                        parts.append(
-                            f'<span style="color:#d1d5db;">{html.escape(step)}</span>'
-                        )
-                sep = '<span style="color:#9ca3af;margin:0 4px;">›</span>'
-                indicator = sep.join(parts)
+            def _on_loop_iteration(
+                iter_no: int, max_iters: int, phase: str, score: int = 0
+            ) -> None:
+                if score > 0:
+                    _curr_score[0] = score
+                msg_idx = min(iter_no - 1, len(_LOOP_MESSAGES) - 1)
+                label = (
+                    f"🤔 {_prev_score[0]}점 → {_curr_score[0]}점 : {_LOOP_MESSAGES[msg_idx]}..."
+                )
                 if phase_slot is not None:
-                    phase_slot.markdown(
-                        f'<div style="font-size:13px;line-height:1.6;padding:6px 12px;">'
-                        f'<span style="color:#6b7280;">🔄 반복 {iter_no}/{max_iters}&nbsp;|&nbsp;</span>'
-                        f"{indicator}</div>",
-                        unsafe_allow_html=True,
-                    )
-                _loop_iter_step[0] += 1
+                    phase_slot.markdown(_pc_loading_bar(label), unsafe_allow_html=True)
+                if score > 0:
+                    _prev_score[0] = _curr_score[0]
 
             loop_result = invoke_with_retry(
                 run_self_improve_loop,

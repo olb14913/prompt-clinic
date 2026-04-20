@@ -177,7 +177,7 @@ def _run_phase1_openai_loop(
     rewrite_r_openai: Any,
     routing: RoutingConfig,
     invoke_with_retry_fn: Callable[..., Any],
-    on_iteration: Callable[[int, int, str], None] | None,
+    on_iteration: Callable[[int, int, str, int], None] | None,
 ) -> tuple[list[dict[str, Any]], int]:
     """Phase 1: OpenAI 전용 루프. 반환: (history, phase1_best_score)"""
     current_prompt = str(base_input.get("user_prompt") or "")
@@ -194,7 +194,7 @@ def _run_phase1_openai_loop(
             "context_profile": context_profile,
         }
         if on_iteration is not None:
-            on_iteration(iter_no, _PHASE1_MAX_ITERS, "진단")
+            on_iteration(iter_no, _PHASE1_MAX_ITERS, "진단", 0)
         diagnosis = invoke_with_retry_fn(diagnosis_r.invoke, merged)
         weighted = apply_goal_weights(
             diagnosis, list(base_input.get("improvement_goals") or [])
@@ -202,7 +202,7 @@ def _run_phase1_openai_loop(
         score = int(weighted.get("total_score") or 0)
 
         if on_iteration is not None:
-            on_iteration(iter_no, _PHASE1_MAX_ITERS, f"개선안 생성 ({label_openai})")
+            on_iteration(iter_no, _PHASE1_MAX_ITERS, f"개선안 생성 ({label_openai})", score)
         rewrite = invoke_with_retry_fn(
             rewrite_r_openai.invoke,
             {**merged, "diagnosis": diagnosis},
@@ -242,7 +242,7 @@ def _run_phase2_opus_loop(
     rewrite_r_opus: Any,
     routing: RoutingConfig,
     invoke_with_retry_fn: Callable[..., Any],
-    on_iteration: Callable[[int, int, str], None] | None,
+    on_iteration: Callable[[int, int, str, int], None] | None,
 ) -> list[dict[str, Any]]:
     """Phase 2: Opus 교차 검증 1회 + 조건부 추가 루프. 반환: 업데이트된 history."""
     result = list(history)
@@ -264,7 +264,7 @@ def _run_phase2_opus_loop(
         "context_profile": context_profile,
     }
     if on_iteration is not None:
-        on_iteration(iter_val, total_p2, f"Opus 교차 검증 ({label_opus})")
+        on_iteration(iter_val, total_p2, f"Opus 교차 검증 ({label_opus})", 0)
     try:
         rewrite_val = invoke_with_retry_fn(
             rewrite_r_opus.invoke,
@@ -332,7 +332,7 @@ def _run_phase2_opus_loop(
                 label = f"전략 전환 ({persona_name})"
             else:
                 label = f"개선안 생성 ({label_opus})"
-            on_iteration(iter_extra, total_p2, label)
+            on_iteration(iter_extra, total_p2, label, 0)
 
         diag_extra = invoke_with_retry_fn(diagnosis_r.invoke, merged_extra)
         w_extra = apply_goal_weights(
@@ -377,7 +377,7 @@ def run_self_improve_loop(
     routing: RoutingConfig,
     max_iters: int,
     invoke_with_retry_fn: Callable[..., Any],
-    on_iteration: Callable[[int, int, str], None] | None = None,
+    on_iteration: Callable[[int, int, str, int], None] | None = None,
 ) -> dict[str, Any]:
     """Phase 1 (OpenAI 최대 3회) → Phase 2 (Opus 최대 3회) 후 최고점 결과 반환."""
     history, phase1_best_score = _run_phase1_openai_loop(
