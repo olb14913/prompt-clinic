@@ -283,7 +283,7 @@ def build_pdf_report(
     pdf.add_page()
 
     if font_path:
-        pdf.add_font("NanumGothic", "", font_path, uni=True)
+        pdf.add_font("NanumGothic", "", font_path)
 
     def _h(size: int, bold: bool = False) -> None:
         if font_path:
@@ -344,6 +344,89 @@ def build_pdf_report(
     pdf.ln(2)
 
     return bytes(pdf.output())
+
+
+def build_obsidian_report(
+    prompt_name: str,
+    purpose: str,
+    output_format: str,
+    goals: list[str],
+    user_prompt: str,
+    weighted: dict[str, Any],
+    improved: str,
+    changes: list[dict[str, Any]],
+    domain_action: str = "",
+    domain_knowledge: str = "",
+) -> str:
+    """Generate Obsidian-compatible markdown with YAML frontmatter."""
+    grade = str(weighted.get("grade") or "")
+    tags = [t for t in ["prompt-clinic", grade, domain_action, domain_knowledge] if t]
+    tag_yaml = "\n".join(f"  - {t}" for t in tags)
+    goals_yaml = "\n".join(f"  - {g}" for g in goals) if goals else "  - (없음)"
+
+    frontmatter = f"""---
+title: "{prompt_name}"
+date: "{datetime.now().isoformat(timespec='seconds')}"
+purpose: "{purpose or '(없음)'}"
+output_format: "{output_format}"
+goals:
+{goals_yaml}
+total_score: {weighted['total_score']}
+grade: "{grade}"
+domain_action: "{domain_action}"
+domain_knowledge: "{domain_knowledge}"
+tags:
+{tag_yaml}
+---"""
+
+    lines = [
+        frontmatter,
+        "",
+        f"# 프롬프트 아카이빙: {prompt_name}",
+        "",
+        "## 메타데이터",
+        f"- 생성 시각: {datetime.now().isoformat(timespec='seconds')}",
+        f"- 종합 점수: {weighted['total_score']} / 100",
+        f"- 등급: {weighted.get('grade_badge', '')} {grade}",
+        f"- 행위 도메인: {domain_action or '(미분류)'}",
+        f"- 학문 도메인: {domain_knowledge or '(미분류)'}",
+        "",
+        "## 원본 프롬프트 (Before)",
+        "",
+        "```",
+        user_prompt,
+        "```",
+        "",
+        "## 개선 프롬프트 (After)",
+        "",
+        "```",
+        improved,
+        "```",
+        "",
+        "## 진단 결과",
+        "",
+        "### 항목별 점수",
+    ]
+    for key, label in CRITERION_LABELS.items():
+        sc = weighted["weighted_scores"][key]
+        reason = weighted["reasons"].get(key, "")
+        lines.append(f"- **{label}**: {sc} / 25")
+        if reason:
+            lines.append(f"  - 원인: {reason}")
+    lines += [
+        "",
+        "## 변경 이유",
+        "",
+    ]
+    for ch in changes:
+        crit = ch.get("criterion", "")
+        bf = ch.get("before", "")
+        af = ch.get("after", "")
+        rs = ch.get("reason", "")
+        lines.append(f"- **{crit}**: `{bf}` → `{af}`")
+        if rs:
+            lines.append(f"  - {rs}")
+    return "\n".join(lines)
 
 
 def dynamic_text_area_height(text: str, min_px: int = 150, max_px: int = 400) -> int:
@@ -1717,36 +1800,66 @@ def _render_results_panel(snap: dict[str, Any]) -> bool:
     )
 
     fn_pdf = f"{prompt_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
-    try:
-        pdf_bytes = build_pdf_report(
-            prompt_name,
-            snap["purpose"],
-            snap["output_format"],
-            snap["improvement_goals"],
-            original,
-            weighted,
-            improved,
-            changes,
-        )
+    fn_obs = f"{prompt_name}_obsidian_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
+
+    domain_result = snap.get("domain_result") or {}
+    _d_action = str(domain_result.get("domain_action") or "")
+    _d_knowledge = str(domain_result.get("domain_knowledge") or "")
+    obs_body = build_obsidian_report(
+        prompt_name,
+        snap["purpose"],
+        snap["output_format"],
+        snap["improvement_goals"],
+        original,
+        weighted,
+        improved,
+        changes,
+        domain_action=_d_action,
+        domain_knowledge=_d_knowledge,
+    )
+
+    _btn_col1, _btn_col2 = st.columns(2)
+    with _btn_col1:
+        try:
+            pdf_bytes = build_pdf_report(
+                prompt_name,
+                snap["purpose"],
+                snap["output_format"],
+                snap["improvement_goals"],
+                original,
+                weighted,
+                improved,
+                changes,
+            )
+            st.download_button(
+                "⬇️ 리포트 다운로드 (.pdf)",
+                data=pdf_bytes,
+                file_name=fn_pdf,
+                mime="application/pdf",
+                type="secondary",
+                use_container_width=True,
+                key="download_report_pdf",
+            )
+        except Exception as _pdf_err:
+            st.warning(f"PDF 생성 실패: {_pdf_err}")
+            st.download_button(
+                "⬇️ 리포트 다운로드 (.md)",
+                data=md_body,
+                file_name=fn,
+                mime="text/markdown",
+                type="secondary",
+                use_container_width=True,
+                key="download_report_md_fallback",
+            )
+    with _btn_col2:
         st.download_button(
-            "⬇️ 리포트 다운로드 (.pdf)",
-            data=pdf_bytes,
-            file_name=fn_pdf,
-            mime="application/pdf",
-            type="primary",
-            use_container_width=True,
-            key="download_report_pdf",
-        )
-    except Exception as _pdf_err:
-        st.warning(f"PDF 생성 실패: {_pdf_err}")
-        st.download_button(
-            "⬇️ 리포트 다운로드 (.md)",
-            data=md_body,
-            file_name=fn,
+            "⬇️ 프롬프트 아카이빙 (.md)",
+            data=obs_body,
+            file_name=fn_obs,
             mime="text/markdown",
-            type="primary",
+            type="secondary",
             use_container_width=True,
-            key="download_report_md_fallback",
+            key="download_obsidian_md",
         )
 
     return sync
