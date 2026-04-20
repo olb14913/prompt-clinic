@@ -266,8 +266,9 @@ def build_pdf_report(
     output_format: str,
     goals: list[str],
     user_prompt: str,
-    weighted: dict[str, Any],
+    diagnosis_weighted: dict[str, Any],
     improved: str,
+    improved_weighted: dict[str, Any],
     changes: list[dict[str, Any]],
 ) -> bytes:
     """Generate a Korean-friendly PDF report via fpdf2."""
@@ -282,19 +283,30 @@ def build_pdf_report(
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
 
+    font_ready = False
     if font_path:
-        pdf.add_font("NanumGothic", "", font_path)
+        try:
+            pdf.add_font("NanumGothic", "", font_path)
+            font_ready = True
+        except Exception:
+            font_ready = False
 
     def _h(size: int, bold: bool = False) -> None:
-        if font_path:
+        if font_ready:
             pdf.set_font("NanumGothic", size=size)
         else:
             style = "B" if bold else ""
             pdf.set_font("Helvetica", style=style, size=size)
 
+    def _safe_text(txt: str) -> str:
+        if font_ready:
+            return txt
+        # Core fonts do not support Korean; replace unsupported chars to avoid PDF build failure.
+        return txt.encode("latin-1", errors="replace").decode("latin-1")
+
     def _cell(txt: str, size: int = 11, bold: bool = False, ln: bool = True) -> None:
         _h(size, bold)
-        pdf.multi_cell(0, 7, txt)
+        pdf.multi_cell(0, 7, _safe_text(txt))
         if ln:
             pdf.ln(1)
 
@@ -310,26 +322,35 @@ def build_pdf_report(
     pdf.ln(3)
 
     _cell("[\uc9c4\ub2e8 (\uac00\uc911\uce58 \ubc18\uc601)]", size=13, bold=True)
-    _cell(f"\u2022 \uc885\ud569 \uc810\uc218: {weighted['total_score']} / 100")
-    _cell(f"\u2022 \ub4f1\uae09: {weighted['grade_badge']} {weighted['grade']}")
+    _cell(f"\u2022 \uc885\ud569 \uc810\uc218: {diagnosis_weighted['total_score']} / 100")
+    _cell(f"\u2022 \ub4f1\uae09: {diagnosis_weighted['grade_badge']} {diagnosis_weighted['grade']}")
     pdf.ln(2)
     for key, label in CRITERION_LABELS.items():
-        sc = weighted["weighted_scores"][key]
-        reason = weighted["reasons"].get(key, "")
+        sc = diagnosis_weighted["weighted_scores"][key]
+        reason = diagnosis_weighted["reasons"].get(key, "")
         _cell(f"\u2022 {label}: {sc} / 25")
         if reason:
             _cell(f"  \uc6d0\uc778: {reason}", size=9)
     pdf.ln(3)
 
+    _cell("[\uac1c\uc120 \uacb0\uacfc]", size=13, bold=True)
+    _cell(f"\u2022 \uc885\ud569 \uc810\uc218: {improved_weighted['total_score']} / 100")
+    _cell(f"\u2022 \ub4f1\uae09: {improved_weighted['grade_badge']} {improved_weighted['grade']}")
+    pdf.ln(2)
+    for key, label in CRITERION_LABELS.items():
+        sc = improved_weighted["weighted_scores"][key]
+        _cell(f"\u2022 {label}: {sc} / 25")
+    pdf.ln(3)
+
     _cell("[Before]", size=13, bold=True)
     _h(9)
     pdf.set_fill_color(245, 245, 245)
-    pdf.multi_cell(0, 6, user_prompt, fill=True)
+    pdf.multi_cell(0, 6, _safe_text(user_prompt), fill=True)
     pdf.ln(3)
 
     _cell("[After]", size=13, bold=True)
     _h(9)
-    pdf.multi_cell(0, 6, improved, fill=True)
+    pdf.multi_cell(0, 6, _safe_text(improved), fill=True)
     pdf.ln(3)
 
     _cell("[\ubcc0\uacbd \uc774\uc720]", size=13, bold=True)
@@ -943,6 +964,20 @@ section[data-testid="stSidebar"] {{
   -webkit-text-fill-color: #ffffff !important;
 }}
 
+/* 진단 계속하기 버튼: Primary 파란색 */
+.st-key-pc_gate_proceed button {{
+  background-color: {UI_PRIMARY_BLUE} !important;
+  border-color: {UI_PRIMARY_BLUE} !important;
+  color: #ffffff !important;
+  border-radius: 8px !important;
+  font-weight: 600 !important;
+  min-height: 38px !important;
+}}
+.st-key-pc_gate_proceed button * {{
+  color: #ffffff !important;
+  -webkit-text-fill-color: #ffffff !important;
+}}
+
 /* 진단 시작 제외: 개선 포인트 pill만 전용 스타일 */
 .st-key-pc_input_shell .st-key-pc_goal_pills div[data-testid="stButton"] button {{
   width: 100% !important;
@@ -1242,6 +1277,7 @@ div[data-testid="stHorizontalBlock"]:has([data-testid="stDownloadButton"])
 .pc-loading-bar {{
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 10px;
   background: #ffffff;
   border: 1px solid {UI_BORDER_ALTO};
@@ -1460,12 +1496,15 @@ def _render_gate_ui() -> None:
             st.session_state.gate_result = None
             st.session_state.gate_questions = None
 
-        st.button(
-            "진단 계속하기",
-            key="pc_gate_proceed",
-            type="primary",
-            on_click=_on_gate_proceed_click,
-        )
+        _gate_spacer, _gate_btn_col = st.columns([3, 1])
+        with _gate_btn_col:
+            st.button(
+                "🩺 진단 계속하기",
+                key="pc_gate_proceed",
+                type="primary",
+                use_container_width=True,
+                on_click=_on_gate_proceed_click,
+            )
 
 
 def init_session() -> None:
@@ -1576,6 +1615,7 @@ def _run_diagnosis(
             on_retry=_make_retry_phase_cb(phase_slot, "진단"),
         )
         weighted = apply_goal_weights(diagnosis, improvement_goals)
+        diagnosis_weighted = dict(weighted)
         _loop_history: list[dict[str, Any]] = []
         if routing.self_improve_enabled:
             _set_phase("✏️ 개선안 생성 중...")
@@ -1595,22 +1635,25 @@ def _run_diagnosis(
                 "최종 결과를 선택하고 있습니다",
             ]
             _initial_score = int(weighted.get("total_score") or 0)
-            _prev_score = [_initial_score]
-            _curr_score = [_initial_score]
+            _prev_score = [_initial_score]  # 원본/이전 점수 (항상 LEFT)
+            _curr_score = [0]               # 0 = 아직 개선 결과 없음
 
             def _on_loop_iteration(
                 iter_no: int, max_iters: int, phase: str, score: int = 0
             ) -> None:
-                if score > 0:
+                # score가 초기 점수와 다르거나 이미 한 번 개선을 거쳤을 때만 갱신
+                if score > 0 and (_curr_score[0] > 0 or score != _initial_score):
+                    _prev_score[0] = _curr_score[0] if _curr_score[0] > 0 else _initial_score
                     _curr_score[0] = score
                 msg_idx = min(iter_no - 1, len(_LOOP_MESSAGES) - 1)
-                label = (
-                    f"🤔 {_prev_score[0]}점 → {_curr_score[0]}점 : {_LOOP_MESSAGES[msg_idx]}..."
-                )
+                if _curr_score[0] > 0:
+                    label = (
+                        f"🤔 {_prev_score[0]}점 → {_curr_score[0]}점 : {_LOOP_MESSAGES[msg_idx]}..."
+                    )
+                else:
+                    label = f"🤔 {_prev_score[0]}점 → 개선 중 : {_LOOP_MESSAGES[msg_idx]}..."
                 if phase_slot is not None:
                     phase_slot.markdown(_pc_loading_bar(label), unsafe_allow_html=True)
-                if score > 0:
-                    _prev_score[0] = _curr_score[0]
 
             loop_result = invoke_with_retry(
                 run_self_improve_loop,
@@ -1628,8 +1671,8 @@ def _run_diagnosis(
             _loop_history = list(loop_result.get("history") or [])
             best = loop_result.get("best") or {}
             rewrite = best.get("rewrite") or {}
-            weighted = best.get("weighted") or weighted
-            diagnosis = best.get("diagnosis_raw") or diagnosis
+            improved_weighted = best.get("weighted") or weighted
+            improved_diagnosis = best.get("diagnosis_raw") or diagnosis
         else:
             merged = {**merged, "diagnosis": diagnosis}
             _set_phase("✏️ 개선안 생성 중...")
@@ -1638,8 +1681,21 @@ def _run_diagnosis(
                 merged,
                 on_retry=_make_retry_phase_cb(phase_slot, "개선안 생성"),
             )
+            _set_phase("📈 개선결과 재진단 중...")
+            improved_input = {
+                **base_input,
+                "user_prompt": str(rewrite.get("improved_prompt", "")),
+                "context_profile": context_profile,
+            }
+            improved_diagnosis = invoke_with_retry(
+                diagnosis_r.invoke,
+                improved_input,
+                on_retry=_make_retry_phase_cb(phase_slot, "개선결과 재진단"),
+            )
+            improved_weighted = apply_goal_weights(improved_diagnosis, improvement_goals)
 
         improved = str(rewrite.get("improved_prompt", ""))
+        weighted = improved_weighted
 
         # F-23-2: 의도 드리프트 점수 산출 (UI 노출 없음, jsonl 내부 지표)
         _drift_score = 0.0
@@ -1666,6 +1722,9 @@ def _run_diagnosis(
             "domain_result": st.session_state.domain_result,
             "context_profile": context_profile,
             "diagnosis_raw": diagnosis,
+            "improved_diagnosis_raw": improved_diagnosis,
+            "diagnosis_weighted": diagnosis_weighted,
+            "improved_weighted": improved_weighted,
             "weighted": weighted,
             "rewrite": rewrite,
             "drift_score": _drift_score,
@@ -1719,22 +1778,23 @@ def _render_results_panel(snap: dict[str, Any]) -> bool:
         sync_prompt_from_widget: 입력 위젯과 스냅샷 동기화 여부(항상 True).
     """
     sync = True
-    weighted = snap["weighted"]
+    diagnosis_weighted = snap.get("diagnosis_weighted") or snap["weighted"]
+    improved_weighted = snap.get("improved_weighted") or snap["weighted"]
     improved = str(snap["rewrite"].get("improved_prompt", ""))
     changes = list(snap["rewrite"].get("changes") or [])
     original = snap["user_prompt"]
     crit_keys = ["clarity", "constraint", "output_format", "context"]
-    bonus_map = weighted.get("bonus") or {k: 0 for k in crit_keys}
+    bonus_map = diagnosis_weighted.get("bonus") or {k: 0 for k in crit_keys}
 
     st.markdown('<p class="pc-card-title">진단 결과</p>', unsafe_allow_html=True)
-    _render_diagnosis_score_cards(weighted, crit_keys, bonus_map)
-    grade_label, grade_bg, grade_fg = _figma_grade_badge(str(weighted.get("grade") or ""))
-    grade_emoji = _grade_emoji_label(str(weighted.get("grade") or ""))
+    _render_diagnosis_score_cards(diagnosis_weighted, crit_keys, bonus_map)
+    _, grade_bg, grade_fg = _figma_grade_badge(str(diagnosis_weighted.get("grade") or ""))
+    grade_emoji = _grade_emoji_label(str(diagnosis_weighted.get("grade") or ""))
     st.markdown(
         f"""
 <div class="pc-total-row">
   <span class="pc-total-prefix">종합점수 :</span>
-  <span class="pc-total-text">{weighted['total_score']} <small>/ 100</small></span>
+  <span class="pc-total-text">{diagnosis_weighted['total_score']} <small>/ 100</small></span>
   <span class="pc-pill" style="background:{grade_bg};color:{grade_fg};">{grade_emoji}</span>
 </div>
 """,
@@ -1743,13 +1803,13 @@ def _render_results_panel(snap: dict[str, Any]) -> bool:
     st.markdown("#### 항목별 개선포인트")
     for key in crit_keys:
         b_pts = int(bonus_map.get(key, 0))
-        final_sc = weighted["weighted_scores"][key]
+        final_sc = diagnosis_weighted["weighted_scores"][key]
         icon = CRITERION_ICONS.get(key, "•")
         exp_title = criterion_expander_title(
             f"{icon} {CRITERION_LABELS[key]}", final_sc, b_pts
         )
         with st.expander(exp_title, expanded=True):
-            reason_text = str(weighted["reasons"].get(key, "") or "").strip()
+            reason_text = str(diagnosis_weighted["reasons"].get(key, "") or "").strip()
             lines = [ln.strip(" -•\t") for ln in reason_text.splitlines() if ln.strip()]
             if not lines and reason_text:
                 lines = [reason_text]
@@ -1763,6 +1823,22 @@ def _render_results_panel(snap: dict[str, Any]) -> bool:
         "개선결과</p>",
         unsafe_allow_html=True,
     )
+    _render_diagnosis_score_cards(improved_weighted, crit_keys, {k: 0 for k in crit_keys})
+    _, imp_grade_bg, imp_grade_fg = _figma_grade_badge(
+        str(improved_weighted.get("grade") or "")
+    )
+    imp_grade_emoji = _grade_emoji_label(str(improved_weighted.get("grade") or ""))
+    st.markdown(
+        f"""
+<div class="pc-total-row">
+  <span class="pc-total-prefix">종합점수 :</span>
+  <span class="pc-total-text">{improved_weighted['total_score']} <small>/ 100</small></span>
+  <span class="pc-pill" style="background:{imp_grade_bg};color:{imp_grade_fg};">{imp_grade_emoji}</span>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
     c1, c2 = st.columns(2)
     with c1:
         st.markdown(
@@ -1785,82 +1861,6 @@ def _render_results_panel(snap: dict[str, Any]) -> bool:
         )
 
     _render_improvement_bullets(changes)
-
-    prompt_name = str(snap.get("prompt_name") or "prompt_clinic")
-    fn = f"prompt_clinic_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
-    md_body = build_markdown_report(
-        prompt_name,
-        snap["purpose"],
-        snap["output_format"],
-        snap["improvement_goals"],
-        original,
-        weighted,
-        improved,
-        changes,
-    )
-
-    fn_pdf = f"{prompt_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
-    fn_obs = f"{prompt_name}_obsidian_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
-
-    domain_result = snap.get("domain_result") or {}
-    _d_action = str(domain_result.get("domain_action") or "")
-    _d_knowledge = str(domain_result.get("domain_knowledge") or "")
-    obs_body = build_obsidian_report(
-        prompt_name,
-        snap["purpose"],
-        snap["output_format"],
-        snap["improvement_goals"],
-        original,
-        weighted,
-        improved,
-        changes,
-        domain_action=_d_action,
-        domain_knowledge=_d_knowledge,
-    )
-
-    _btn_col1, _btn_col2 = st.columns(2)
-    with _btn_col1:
-        try:
-            pdf_bytes = build_pdf_report(
-                prompt_name,
-                snap["purpose"],
-                snap["output_format"],
-                snap["improvement_goals"],
-                original,
-                weighted,
-                improved,
-                changes,
-            )
-            st.download_button(
-                "⬇️ 리포트 다운로드 (.pdf)",
-                data=pdf_bytes,
-                file_name=fn_pdf,
-                mime="application/pdf",
-                type="secondary",
-                use_container_width=True,
-                key="download_report_pdf",
-            )
-        except Exception as _pdf_err:
-            st.warning(f"PDF 생성 실패: {_pdf_err}")
-            st.download_button(
-                "⬇️ 리포트 다운로드 (.md)",
-                data=md_body,
-                file_name=fn,
-                mime="text/markdown",
-                type="secondary",
-                use_container_width=True,
-                key="download_report_md_fallback",
-            )
-    with _btn_col2:
-        st.download_button(
-            "⬇️ 프롬프트 아카이빙 (.md)",
-            data=obs_body,
-            file_name=fn_obs,
-            mime="text/markdown",
-            type="secondary",
-            use_container_width=True,
-            key="download_obsidian_md",
-        )
 
     return sync
 
@@ -1901,6 +1901,68 @@ def _render_loop_history_cards() -> None:
                 f"</div>",
                 unsafe_allow_html=True,
             )
+
+
+def _render_report_buttons(snap: dict[str, Any]) -> None:
+    """리포트 다운로드/아카이빙 버튼 렌더링."""
+    prompt_name = str(snap.get("prompt_name") or "prompt_clinic")
+    original = str(snap.get("user_prompt") or "")
+    improved = str((snap.get("rewrite") or {}).get("improved_prompt") or "")
+    changes = list((snap.get("rewrite") or {}).get("changes") or [])
+    diagnosis_weighted = snap.get("diagnosis_weighted") or snap.get("weighted") or {}
+    improved_weighted = snap.get("improved_weighted") or snap.get("weighted") or {}
+
+    fn_pdf = f"{prompt_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+    fn_obs = f"{prompt_name}_obsidian_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
+
+    domain_result = snap.get("domain_result") or {}
+    _d_action = str(domain_result.get("domain_action") or "")
+    _d_knowledge = str(domain_result.get("domain_knowledge") or "")
+    obs_body = build_obsidian_report(
+        prompt_name,
+        snap["purpose"],
+        snap["output_format"],
+        snap["improvement_goals"],
+        original,
+        improved_weighted,
+        improved,
+        changes,
+        domain_action=_d_action,
+        domain_knowledge=_d_knowledge,
+    )
+
+    _btn_col1, _btn_col2 = st.columns(2)
+    with _btn_col1:
+        pdf_bytes = build_pdf_report(
+            prompt_name,
+            snap["purpose"],
+            snap["output_format"],
+            snap["improvement_goals"],
+            original,
+            diagnosis_weighted,
+            improved,
+            improved_weighted,
+            changes,
+        )
+        st.download_button(
+            "⬇️ 리포트 다운로드 (.pdf)",
+            data=pdf_bytes,
+            file_name=fn_pdf,
+            mime="application/pdf",
+            type="secondary",
+            use_container_width=True,
+            key="download_report_pdf",
+        )
+    with _btn_col2:
+        st.download_button(
+            "⬇️ 프롬프트 아카이빙 (.md)",
+            data=obs_body,
+            file_name=fn_obs,
+            mime="text/markdown",
+            type="secondary",
+            use_container_width=True,
+            key="download_obsidian_md",
+        )
 
 
 def _render_history_panel() -> None:
@@ -2318,6 +2380,7 @@ span[data-baseweb="tag"] {
     sync_prompt_from_widget = True
 
     _loading_slot = st.empty()  # 로딩 바 슬롯: pc_input_shell 카드 하단 외부
+    _gate_ui_slot = st.empty()  # 게이트 UI 슬롯: gate_should_proceed 시 즉시 .empty() 가능
 
     if st.session_state.get("pc_manual_retry_diagnosis"):
         st.session_state.pc_manual_retry_diagnosis = False
@@ -2336,6 +2399,7 @@ span[data-baseweb="tag"] {
     # F-20: "진단 계속하기" 클릭 시 현재 위젯 값으로 진단 실행
     _skip_run_block = False
     if st.session_state.get("gate_should_proceed"):
+        _gate_ui_slot.empty()  # expander 즉시 제거 (blocking 호출 전)
         st.session_state.gate_should_proceed = False
         _gpending = st.session_state.get("gate_pending_diagnosis")
         # gate_result/questions는 _gpending 존재 여부와 무관하게 항상 클리어
@@ -2489,8 +2553,9 @@ span[data-baseweb="tag"] {
                     "auto_trigger": auto_trigger,
                 }
 
-    # F-20-2/3: 게이트 배너 + 보완 질문 expander
-    _render_gate_ui()
+    # F-20-2/3: 게이트 배너 + 보완 질문 expander (슬롯 컨테이너로 즉시 교체 가능)
+    with _gate_ui_slot.container():
+        _render_gate_ui()
 
     snap = st.session_state.last_snapshot
     if snap:
@@ -2498,6 +2563,7 @@ span[data-baseweb="tag"] {
         sync_prompt_from_widget = _render_results_panel(snap)
         if os.environ.get("SELF_IMPROVE_ENABLED", "false").lower() == "true":
             _render_loop_history_cards()
+        _render_report_buttons(snap)
 
     _render_history_panel()
 
