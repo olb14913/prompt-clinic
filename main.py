@@ -250,12 +250,22 @@ def build_markdown_report(
     return "\n".join(lines)
 
 
+def _is_sfnt_font_file(path: Path) -> bool:
+    """TrueType/OpenType SFNT 매직만 허용 (잘못 저장된 HTML 등 제외)."""
+    try:
+        head = path.read_bytes()[:4]
+    except OSError:
+        return False
+    # SFNT: TrueType 0x00010000, Apple 'true', CFF 'OTTO', collection 'ttcf'
+    return head in (b"\x00\x01\x00\x00", b"true", b"OTTO", b"ttcf")
+
+
 def _find_korean_font() -> str | None:
     candidates = [
         Path(__file__).parent / "data" / "fonts" / "NanumGothic.ttf",
     ]
     for p in candidates:
-        if p.exists():
+        if p.exists() and _is_sfnt_font_file(p):
             return str(p)
     return None
 
