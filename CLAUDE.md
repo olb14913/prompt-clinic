@@ -18,13 +18,18 @@
 - `utils/notion.py` : Notion 저장 + Notion few-shot 조회 + F-15-2 fewshot DB write-back
 - `utils/data_pipeline.py` : 원천 실행로그(`prompt_runs.jsonl`) 적재 + few-shot 자동 갱신 + F-15-1 quality_tag 태깅
 - `utils/vector_store.py` : F-16-1 Chroma Vector DB 구축 + F-16-3 search_diagnosis/search_rewrite
-- `data/fewshot_examples.json` : 진단 체인 few-shot 예시(JSON, fallback)
+- `data/fewshot_examples.json` : 진단 체인 few-shot 예시(JSON, fallback). `scripts/merge_collected.py`로 외부 소스 병합 가능
 - `data/prompt_runs.jsonl` : 진단/개선 실행 원천 로그(JSONL, append-only)
 - `data/guides/` : 외부 가이드북 PDF/MD/TXT (수동 관리, 재작성 인덱스 대상, domain_knowledge: "일반")
-- `data/wiki/{domain}/` : 도메인별 LLM Wiki (medical/law/design/coding/science/marketing/general)
+- `data/wiki/{domain}/` : 도메인별 LLM Wiki (medical/law/design/coding/science/marketing/general). `scripts/collect_wiki.py`로 한국어 Wikipedia에서 도메인당 15건 자동 수집 (YAML frontmatter + 본문 Markdown)
+- `scripts/_classify.py` : 행위축/학문축 키워드 기반 분류 공용 모듈 (F-25 2축과 동일 라벨)
+- `scripts/collect_huggingface.py` : HuggingFace `fka/awesome-chatgpt-prompts` → `data/collected_huggingface.jsonl`
+- `scripts/collect_github.py` : GitHub `f/awesome-chatgpt-prompts/prompts.csv` → `data/collected_github.jsonl`
+- `scripts/collect_wiki.py` : 도메인 시드 → 한국어 Wikipedia API → `data/wiki/{domain}/*.md` (`--domain` 다중 지정, `--min-chars` 스텁 필터)
+- `scripts/merge_collected.py` : 수집물 + 기존 `fewshot_examples.json` 병합/중복제거 후 재저장 + 도메인 통계 출력
 - `prompt_clinic_logo.png` : 브랜드 로고 PNG (없으면 인라인 SVG 폴백)
 - `.env` : API 키 및 라우팅 옵션 (git 제외)
-- `requirements.txt` : 의존성 (tiktoken, chromadb, langchain-community, markitdown 포함)
+- `requirements.txt` : 의존성 (tiktoken, chromadb, langchain-community, markitdown, datasets 포함)
 
 ---
 
@@ -228,12 +233,20 @@ requirements.txt
 
 ### F-16 RAG 인프라 — ✅ Phase 4 완료
 > `utils/vector_store.py` 신규. `RAG_ENABLED=false` 기본값 — 활성화 전 `build_index()` 먼저 실행 필요.
+> wiki 로더는 `.md` 상단의 YAML frontmatter(`---`…`---`)를 제거한 뒤 청킹한다.
 - [x] F-16-1 통합 Vector DB 인덱스 구축 (`utils/vector_store.py`, Chroma)
-  - 진단 컬렉션: `prompt_runs.jsonl` + `fewshot_examples.json` (행위축 필터)
+  - 진단 컬렉션: `prompt_runs.jsonl` + `fewshot_examples.json` + `data/guides/` + `data/wiki/{domain}/` (행위축 필터)
   - 재작성 컬렉션: `data/guides/` PDF/MD/TXT + `data/wiki/{domain}/` + `fewshot_examples.json` (학문축 필터)
-- [x] F-16-3 체인별 분리 인덱스 운영 (Chain 2: `search_diagnosis()` / Chain 3: `search_rewrite()`)
+- [x] F-16-3 체인별 분리 인덱스 운영 (Chain 2: `search_diagnosis()` / Chain 3: `search_rewrite()`, 둘 다 k=3)
 - [ ] F-16-4 RAG 정량적 성능 지표 — **0.2 개발 완료 후 착수**
 - [x] F-16-5 RAG 토큰 절감 — UI 없음. `before/after_token_count` jsonl 축적으로 완료 처리. 데이터 충분 시 통계 활용 예정
+
+### F-27 학습 데이터 수집 파이프라인 (scripts/) — ✅ 완료
+> 외부 공개 소스에서 프롬프트/도메인 지식을 수집해 few-shot과 RAG 인덱스를 증강한다.
+- [x] F-27-1 프롬프트 수집: HuggingFace(`fka/awesome-chatgpt-prompts`) + GitHub(`f/awesome-chatgpt-prompts`) → `data/collected_*.jsonl`
+- [x] F-27-2 키워드 기반 2축 자동 분류(`scripts/_classify.py`) + `fewshot_examples.json` 병합/중복제거(`scripts/merge_collected.py`)
+- [x] F-27-3 도메인 지식 수집: 한국어 Wikipedia API → `data/wiki/{domain}/*.md` (도메인당 15건, frontmatter + 본문 Markdown, 500자 미만 스텁 자동 스킵)
+- [x] F-27-4 Chroma 재빌드 후 `search_rewrite`/`search_diagnosis`에서 도메인/행위축 필터로 활용
 
 ---
 

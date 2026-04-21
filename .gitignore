@@ -1,3 +1,18 @@
 .env
 venv/
 __pycache__/
+
+# Chroma Vector DB — 로컬에서 build_index()로 재생성 (git 추적 제외)
+chroma_db/
+
+# Python 아티팩트
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# OS / 에디터
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

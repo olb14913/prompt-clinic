@@ -178,6 +178,20 @@ def _load_docs_from_guides() -> list[tuple[str, dict[str, str]]]:
     return docs
 
 
+def _strip_yaml_frontmatter(text: str) -> str:
+    """문서 맨 위의 YAML frontmatter(`---` ... `---`) 블록 제거."""
+    stripped = text.lstrip("\ufeff")
+    if not stripped.startswith("---"):
+        return text
+    lines = stripped.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return text
+    for idx in range(1, len(lines)):
+        if lines[idx].strip() == "---":
+            return "\n".join(lines[idx + 1 :]).lstrip("\n")
+    return text
+
+
 def _load_docs_from_wiki() -> list[tuple[str, dict[str, str]]]:
     """data/wiki/{domain}/ 파일들 → 청킹 후 (text, metadata) 리스트."""
     if not WIKI_DIR.exists():
@@ -198,6 +212,8 @@ def _load_docs_from_wiki() -> list[tuple[str, dict[str, str]]]:
                     text = file_path.read_text(encoding="utf-8")
                 except OSError:
                     continue
+                if file_path.suffix == ".md":
+                    text = _strip_yaml_frontmatter(text)
             if not text.strip():
                 continue
             for chunk in _chunk_text(text):
