@@ -18,6 +18,15 @@ _CRITERION_LABELS: dict[str, str] = {
     "context": "맥락반영도",
 }
 
+# `main.IMPROVEMENT_OPTIONS`와 동일 문자열 — Notion에 동일 이름의 속성(체크박스/셀렉트 등)이 있으면 매핑
+_IMPROVEMENT_GOAL_LABELS: tuple[str, ...] = (
+    "출력 품질 높이기",
+    "맥락 보완",
+    "구조화",
+    "일관성 높이기",
+    "토큰 줄이기",
+)
+
 
 def _headers() -> dict[str, str]:
     api_key = os.environ.get("NOTION_API_KEY", "")
@@ -161,6 +170,127 @@ def _extract_option_names(prop_meta: dict[str, Any], key: str) -> set[str]:
     return names
 
 
+def _norm_prop_key(name: str) -> str:
+    return " ".join(str(name).strip().split())
+
+
+def _resolve_db_prop_name(db_props: dict[str, Any], label: str) -> str | None:
+    target = _norm_prop_key(label)
+    for key in db_props:
+        if _norm_prop_key(key) == target:
+            return key
+    return None
+
+
+def _select_active_option_name(prop_meta: dict[str, Any]) -> str:
+    """select 속성에서 '선택됨'에 해당할 옵션 이름 (예/Yes 등 우선)."""
+    option_names = sorted(_extract_option_names(prop_meta, "select"))
+    if not option_names:
+        return ""
+    positive = {"예", "Yes", "YES", "yes", "Y", "O", "해당", "적용", "선택", "☑"}
+    for n in option_names:
+        if n in positive:
+            return n
+    return option_names[0]
+
+
+def _apply_structured_improvement_goals(
+    snapshot: dict[str, Any],
+    db_props: dict[str, Any],
+    payload_props: dict[str, Any],
+) -> bool:
+    """Notion DB에 '구조화' 등 목적별 컬럼이 있으면 checkbox/select로 반영. True면 최소 1개 속성에 기록."""
+    goals_raw = snapshot.get("improvement_goals") or []
+    selected = {_norm_prop_key(str(g)) for g in goals_raw if str(g).strip()}
+    any_written = False
+    for label in _IMPROVEMENT_GOAL_LABELS:
+        key = _resolve_db_prop_name(db_props, label)
+        if not key:
+            continue
+        meta = db_props.get(key)
+        if not isinstance(meta, dict):
+            continue
+        ptype = str(meta.get("type") or "")
+        on = _norm_prop_key(label) in selected
+        if ptype == "checkbox":
+            payload_props[key] = {"checkbox": on}
+            any_written = True
+        elif ptype == "select":
+            if on:
+                opt = _select_active_option_name(meta)
+                option_names = _extract_option_names(meta, "select")
+                if opt and (not option_names or opt in option_names):
+                    payload_props[key] = {"select": {"name": opt}}
+                else:
+                    payload_props[key] = {"select": {}}
+            else:
+                payload_props[key] = {"select": {}}
+            any_written = True
+        elif ptype == "multi_select":
+            onames = _extract_option_names(meta, "multi_select")
+            if on and onames:
+                pick = label if label in onames else next(
+                    (n for n in onames if label in n or n in label), ""
+                )
+                if not pick:
+                    pick = sorted(onames)[0]
+                payload_props[key] = {"multi_select": [{"name": pick}]}
+            else:
+                payload_props[key] = {"multi_select": []}
+            any_written = True
+    return any_written
+
+
+def _changes_summary_only(snapshot: dict[str, Any]) -> str:
+    changes: list[dict[str, Any]] = list(
+        (snapshot.get("rewrite") or {}).get("changes") or []
+    )
+    return "\n".join(
+        f"[{ch.get('criterion', '')}] {ch.get('before', '')} → {ch.get('after', '')} : {ch.get('reason', '')}"
+        for ch in changes
+    ).strip()
+
+
+def _selected_improvement_goals(snapshot: dict[str, Any]) -> list[str]:
+    goals_raw = snapshot.get("improvement_goals") or []
+    selected = [str(g).strip() for g in goals_raw if str(g).strip()]
+    uniq: list[str] = []
+    seen: set[str] = set()
+    for item in selected:
+        if item in seen:
+            continue
+        seen.add(item)
+        uniq.append(item)
+    return uniq
+
+
+def _initial_total_score(snapshot: dict[str, Any]) -> int:
+    """최초 진단(개선 전) 종합점수. `main.last_snapshot`의 diagnosis_weighted 사용."""
+    diag_w = snapshot.get("diagnosis_weighted")
+    if isinstance(diag_w, dict) and diag_w.get("total_score") is not None:
+        try:
+            return int(diag_w.get("total_score") or 0)
+        except (TypeError, ValueError):
+            pass
+    return 0
+
+
+def _build_improvement_points_body(snapshot: dict[str, Any]) -> str:
+    """Notion 단일 '개선포인트' 텍스트: UI 개선 목적 + 재작성 changes (구조화 속성 없을 때)."""
+    goals = [
+        str(g).strip()
+        for g in (snapshot.get("improvement_goals") or [])
+        if str(g).strip()
+    ]
+    changes_summary = _changes_summary_only(snapshot)
+    blocks: list[str] = []
+    if goals:
+        blocks.append("[선택한 개선 목적]\n" + "\n".join(f"- {g}" for g in goals))
+    if changes_summary:
+        blocks.append("[재작성 변경 요약]\n" + changes_summary)
+    return "\n\n".join(blocks).strip()
+
+
 def _build_legacy_properties(snapshot: dict[str, Any]) -> dict[str, Any]:
     prompt_name = str(snapshot.get("prompt_name") or "")
     purpose = str(snapshot.get("purpose") or "")
@@ -186,8 +316,12 @@ def _build_legacy_properties(snapshot: dict[str, Any]) -> dict[str, Any]:
     }
     if purpose:
         props["프롬프트 사용목적"] = {"rich_text": _rich_text(purpose)}
-    if changes_summary:
-        props["개선포인트"] = {"rich_text": _rich_text(changes_summary)}
+    improve_body = _build_improvement_points_body(snapshot)
+    if improve_body:
+        props["개선포인트"] = {"rich_text": _rich_text(improve_body)}
+    initial_score = _initial_total_score(snapshot)
+    if initial_score > 0:
+        props["초기점수"] = {"number": initial_score}
     return props
 
 
@@ -201,15 +335,10 @@ def _build_properties_by_schema(
     weighted: dict[str, Any] = snapshot.get("weighted") or {}
     rewrite: dict[str, Any] = snapshot.get("rewrite") or {}
     improved = str(rewrite.get("improved_prompt") or "")
-    changes: list[dict[str, Any]] = list(rewrite.get("changes") or [])
 
     total_score: int = int(weighted.get("total_score") or 0)
     grade: str = str(weighted.get("grade") or "")
     title_text = prompt_name[:40]
-    changes_summary = "\n".join(
-        f"[{ch.get('criterion', '')}] {ch.get('before', '')} → {ch.get('after', '')} : {ch.get('reason', '')}"
-        for ch in changes
-    )
     now_iso = datetime.now(timezone.utc).isoformat()
     payload_props: dict[str, Any] = {}
 
@@ -242,6 +371,21 @@ def _build_properties_by_schema(
     if score_match is not None:
         payload_props[score_match[0]] = {"number": total_score}
 
+    initial_total = _initial_total_score(snapshot)
+    initial_match = _find_property_name(
+        db_props,
+        candidates=[
+            "초기점수",
+            "# 초기점수",
+            "Initial score",
+            "initial_score",
+            "initial total score",
+        ],
+        allowed_types={"number"},
+    )
+    if initial_match is not None:
+        payload_props[initial_match[0]] = {"number": initial_total}
+
     grade_match = _find_property_name(
         db_props,
         candidates=["등급", "grade"],
@@ -273,13 +417,44 @@ def _build_properties_by_schema(
     if after_match is not None and improved:
         payload_props[after_match[0]] = {"rich_text": _rich_text(improved)}
 
+    structured_goals_written = _apply_structured_improvement_goals(
+        snapshot, db_props, payload_props
+    )
+
     improve_match = _find_property_name(
         db_props,
-        candidates=["개선포인트", "개선 포인트", "changes"],
-        allowed_types={"rich_text"},
+        candidates=[
+            "개선포인트",
+            "개선 포인트",
+            "# 개선포인트",
+            "changes",
+            "improvement_points",
+        ],
+        allowed_types={"rich_text", "title", "multi_select"},
     )
-    if improve_match is not None and changes_summary:
-        payload_props[improve_match[0]] = {"rich_text": _rich_text(changes_summary)}
+    if improve_match is not None:
+        imp_name, imp_type = improve_match
+        if imp_type == "multi_select":
+            selected_goals = _selected_improvement_goals(snapshot)
+            prop_meta = db_props.get(imp_name)
+            option_names = (
+                _extract_option_names(prop_meta, "multi_select")
+                if isinstance(prop_meta, dict)
+                else set()
+            )
+            selected_tags = [
+                {"name": goal}
+                for goal in selected_goals
+                if not option_names or goal in option_names
+            ]
+            payload_props[imp_name] = {"multi_select": selected_tags}
+        else:
+            if structured_goals_written:
+                improve_body = _changes_summary_only(snapshot)
+            else:
+                improve_body = _build_improvement_points_body(snapshot)
+            if improve_body:
+                _set_text_prop(payload_props, imp_name, imp_type, improve_body[:2000])
 
     date_match = _find_property_name(
         db_props,
