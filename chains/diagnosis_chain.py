@@ -2,6 +2,7 @@
 
 import json
 import os
+import random
 from pathlib import Path
 from typing import Any
 
@@ -125,23 +126,73 @@ DIAGNOSIS_HUMAN = """## 맥락 프로필 (JSON)
 {format_instructions}"""
 
 
+def _get_fewshot_max() -> int:
+    """FEWSHOT_MAX 환경변수로 few-shot 최대 개수 제어. 기본 4개."""
+    raw = os.environ.get("FEWSHOT_MAX", "").strip()
+    if not raw:
+        return 4
+    try:
+        n = int(raw)
+    except ValueError:
+        return 4
+    return max(1, n)
+
+
+def _sample_fewshot(examples: list[dict[str, Any]], max_n: int) -> list[dict[str, Any]]:
+    """등급(grade) 다양성이 섞이도록 예시를 샘플링한다.
+
+    전체 예시 개수가 max_n 이하면 그대로 반환. 그렇지 않으면 등급별 버킷에서
+    번갈아가며 최대 max_n개까지 뽑아 반환 순서를 유지한다.
+    """
+    if len(examples) <= max_n:
+        return examples
+
+    buckets: dict[str, list[dict[str, Any]]] = {}
+    for ex in examples:
+        grade = str(ex.get("grade") or "기타").strip() or "기타"
+        buckets.setdefault(grade, []).append(ex)
+
+    rng = random.Random(42)
+    for items in buckets.values():
+        rng.shuffle(items)
+
+    picked: list[dict[str, Any]] = []
+    grade_keys = list(buckets.keys())
+    rng.shuffle(grade_keys)
+    idx = 0
+    while len(picked) < max_n and any(buckets[g] for g in grade_keys):
+        g = grade_keys[idx % len(grade_keys)]
+        if buckets[g]:
+            picked.append(buckets[g].pop())
+        idx += 1
+    return picked
+
+
 def load_fewshot_examples() -> list[dict[str, Any]]:
-    """data/fewshot_examples.json 에서 few-shot 예시를 로드한다."""
+    """data/fewshot_examples.json 에서 few-shot 예시를 로드한다.
+
+    파일이 매우 크거나 개수가 많으면 TPM 한도를 쉽게 초과하므로, FEWSHOT_MAX
+    (기본 4) 개로 등급 다양성 샘플링한 뒤 반환한다.
+    """
+    max_n = _get_fewshot_max()
+
     use_notion = os.environ.get("FEWSHOT_SOURCE_NOTION", "").strip().lower()
     if use_notion in {"1", "true", "y", "yes", "on"}:
         notion_examples = load_fewshot_examples_from_notion()
         if notion_examples:
-            return notion_examples
+            return _sample_fewshot(notion_examples, max_n)
     if not _FEWSHOT_PATH.exists():
-        return _DEFAULT_FEWSHOT_EXAMPLES
+        return _sample_fewshot(_DEFAULT_FEWSHOT_EXAMPLES, max_n)
     try:
         loaded = json.loads(_FEWSHOT_PATH.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
-        return _DEFAULT_FEWSHOT_EXAMPLES
+        return _sample_fewshot(_DEFAULT_FEWSHOT_EXAMPLES, max_n)
     if not isinstance(loaded, list):
-        return _DEFAULT_FEWSHOT_EXAMPLES
+        return _sample_fewshot(_DEFAULT_FEWSHOT_EXAMPLES, max_n)
     normalized = [item for item in loaded if isinstance(item, dict)]
-    return normalized or _DEFAULT_FEWSHOT_EXAMPLES
+    if not normalized:
+        return _sample_fewshot(_DEFAULT_FEWSHOT_EXAMPLES, max_n)
+    return _sample_fewshot(normalized, max_n)
 
 
 def format_fewshot_section(examples: list[dict[str, Any]]) -> str:
