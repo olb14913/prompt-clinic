@@ -170,11 +170,13 @@ def format_fewshot_section(examples: list[dict[str, Any]]) -> str:
 def build_diagnosis_chain(llm: ChatOpenAI):
     fewshot_section = format_fewshot_section(load_fewshot_examples())
     expert_system = "\n\n".join([_EXPERT_SYSTEM_HEADER, fewshot_section, _EXPERT_SYSTEM_FOOTER])
+    # few-shot 예시 본문에 포함된 '{', '}' 가 f-string 템플릿 변수로 오인되지 않도록 이스케이프.
+    expert_system_safe = expert_system.replace("{", "{{").replace("}", "}}")
 
     parser = JsonOutputParser(pydantic_object=DiagnosisResult)
     prompt = ChatPromptTemplate.from_messages(
         [
-            ("system", expert_system),
+            ("system", expert_system_safe),
             ("human", DIAGNOSIS_HUMAN),
         ]
     ).partial(format_instructions=parser.get_format_instructions())
